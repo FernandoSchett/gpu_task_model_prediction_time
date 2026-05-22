@@ -14,6 +14,7 @@ struct KernelRecord {
     int mpi_rank = 0;
     int host_thread_id = 0;
     int kernel_index_in_thread = 0;
+    int thread_local_kernel_index = 0;
     std::uint64_t global_kernel_id = 0;
     int cuda_device_id = 0;
     double arrival_wait_ms = 0.0;
@@ -24,23 +25,35 @@ struct KernelRecord {
     int grid_z = 0;
     std::uint64_t total_blocks = 0;
     std::uint64_t total_cuda_threads = 0;
+    std::uint64_t active_kernels_estimate = 0;
+    std::uint64_t submitted_before_global = 0;
+    std::uint64_t completed_before_global = 0;
+    std::uint64_t inflight_kernels_estimate = 0;
+    double time_since_experiment_start_us = 0.0;
+    std::uint64_t rank_local_submitted_count = 0;
+    std::uint64_t rank_local_completed_count = 0;
     std::int64_t submit_time_ns = 0;
     std::int64_t completion_time_ns = 0;
+    std::int64_t host_submit_time_ns = 0;
+    std::int64_t host_completion_time_ns = 0;
     double response_time_us = 0.0;
     double launch_overhead_us = 0.0;
+    double cuda_event_elapsed_time_us = -1.0;
     int cuda_error_code = 0;
     std::string cuda_error_string;
 };
 
 class CsvWriter {
 public:
-    explicit CsvWriter(const std::string &path);
+    explicit CsvWriter(const std::string &path, std::uint64_t flush_every);
     void write(const KernelRecord &record);
     void flush();
 
 private:
     std::ofstream file_;
     std::mutex mutex_;
+    std::uint64_t flush_every_ = 1000;
+    std::uint64_t rows_since_flush_ = 0;
 };
 
 #endif

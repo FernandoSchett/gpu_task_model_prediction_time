@@ -32,7 +32,8 @@ std::string csv_escape(const std::string &value) {
 
 }  // namespace
 
-CsvWriter::CsvWriter(const std::string &path) : file_(path) {
+CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
+    : file_(path), flush_every_(flush_every) {
     if (!file_) {
         throw std::runtime_error("Could not open CSV file: " + path);
     }
@@ -44,6 +45,7 @@ CsvWriter::CsvWriter(const std::string &path) : file_(path) {
           << "mpi_rank,"
           << "host_thread_id,"
           << "kernel_index_in_thread,"
+          << "thread_local_kernel_index,"
           << "global_kernel_id,"
           << "cuda_device_id,"
           << "arrival_wait_ms,"
@@ -54,10 +56,20 @@ CsvWriter::CsvWriter(const std::string &path) : file_(path) {
           << "grid_z,"
           << "total_blocks,"
           << "total_cuda_threads,"
+          << "active_kernels_estimate,"
+          << "submitted_before_global,"
+          << "completed_before_global,"
+          << "inflight_kernels_estimate,"
+          << "time_since_experiment_start_us,"
+          << "rank_local_submitted_count,"
+          << "rank_local_completed_count,"
           << "submit_time_ns,"
           << "completion_time_ns,"
+          << "host_submit_time_ns,"
+          << "host_completion_time_ns,"
           << "response_time_us,"
           << "launch_overhead_us,"
+          << "cuda_event_elapsed_time_us,"
           << "cuda_error_code,"
           << "cuda_error_string\n";
 }
@@ -72,6 +84,7 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.mpi_rank << ','
           << record.host_thread_id << ','
           << record.kernel_index_in_thread << ','
+          << record.thread_local_kernel_index << ','
           << record.global_kernel_id << ','
           << record.cuda_device_id << ','
           << std::fixed << std::setprecision(6) << record.arrival_wait_ms << ','
@@ -82,14 +95,28 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.grid_z << ','
           << record.total_blocks << ','
           << record.total_cuda_threads << ','
+          << record.active_kernels_estimate << ','
+          << record.submitted_before_global << ','
+          << record.completed_before_global << ','
+          << record.inflight_kernels_estimate << ','
+          << std::fixed << std::setprecision(3) << record.time_since_experiment_start_us << ','
+          << record.rank_local_submitted_count << ','
+          << record.rank_local_completed_count << ','
           << record.submit_time_ns << ','
           << record.completion_time_ns << ','
+          << record.host_submit_time_ns << ','
+          << record.host_completion_time_ns << ','
           << std::fixed << std::setprecision(3) << record.response_time_us << ','
           << std::fixed << std::setprecision(3) << record.launch_overhead_us << ','
+          << std::fixed << std::setprecision(3) << record.cuda_event_elapsed_time_us << ','
           << record.cuda_error_code << ','
           << csv_escape(record.cuda_error_string) << '\n';
 
-    file_.flush();
+    ++rows_since_flush_;
+    if (rows_since_flush_ >= flush_every_) {
+        file_.flush();
+        rows_since_flush_ = 0;
+    }
 }
 
 void CsvWriter::flush() {

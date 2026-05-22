@@ -22,6 +22,7 @@ struct ExperimentConfig {
     int threads_per_process = 1;
     int kernels_per_thread = 1;
     int warmup_kernels = 20;
+    int flush_every = 1000;
     double arrival_min_ms = 1.0;
     double arrival_max_ms = 1.0;
     std::uint64_t kernel_min_us = 100;

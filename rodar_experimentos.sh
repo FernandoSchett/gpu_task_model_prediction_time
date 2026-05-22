@@ -13,6 +13,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-resultados}"
 DEFAULT_DEVICE="${DEFAULT_DEVICE:-0}"
 SYNC_MODE="${SYNC_MODE:-blocking}"
 WARMUP_KERNELS="${WARMUP_KERNELS:-20}"
+FLUSH_EVERY="${FLUSH_EVERY:-1000}"
 
 mkdir -p "${OUTPUT_DIR}"
 make
@@ -44,6 +45,7 @@ for ranks in "${MPI_RANKS[@]}"; do
                 --threads-per-process "${threads}" \
                 --kernels-per-thread "${KERNELS_PER_THREAD}" \
                 --warmup-kernels "${WARMUP_KERNELS}" \
+                --flush-every "${FLUSH_EVERY}" \
                 --arrival-min-ms "${arrival_min_ms}" \
                 --arrival-max-ms "${arrival_max_ms}" \
                 --kernel-min-us "${kernel_min_us}" \

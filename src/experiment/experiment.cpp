@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -25,6 +26,56 @@ namespace {
 constexpr std::uint64_t kRankSeedPrime = 1000003ULL;
 constexpr std::uint64_t kThreadSeedPrime = 1000033ULL;
 constexpr std::uint64_t kWarmupSeedSalt = 0x9E3779B97F4A7C15ULL;
+
+struct ExperimentRuntimeState {
+    std::atomic<std::uint64_t> rank_submitted_count{0};
+    std::atomic<std::uint64_t> rank_completed_count{0};
+    std::atomic<std::uint64_t> active_kernels{0};
+    std::atomic<std::int64_t> measurement_start_ns{0};
+};
+
+class MeasurementStartBarrier {
+public:
+    explicit MeasurementStartBarrier(int participants)
+        : participants_(participants > 0 ? participants : 1) {}
+
+    bool arrive_and_wait(ExperimentRuntimeState &runtime_state) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (aborted_) {
+            return false;
+        }
+
+        const int generation = generation_;
+        ++arrived_;
+        if (arrived_ == participants_) {
+            runtime_state.measurement_start_ns.store(Timer::now_ns(), std::memory_order_release);
+            arrived_ = 0;
+            ++generation_;
+            condition_.notify_all();
+            return true;
+        }
+
+        condition_.wait(lock, [this, generation]() {
+            return aborted_ || generation_ != generation;
+        });
+        return !aborted_;
+    }
+
+    void abort() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        aborted_ = true;
+        ++generation_;
+        condition_.notify_all();
+    }
+
+private:
+    const int participants_;
+    int arrived_ = 0;
+    int generation_ = 0;
+    bool aborted_ = false;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+};
 
 std::string cuda_error_message(cudaError_t error) {
     return std::string(cudaGetErrorString(error));
@@ -116,6 +167,10 @@ void record_thread_error(std::vector<std::string> &errors,
     errors.push_back(out.str());
 }
 
+std::uint64_t estimate_global_count(std::uint64_t rank_local_count, int mpi_world_size) {
+    return rank_local_count * static_cast<std::uint64_t>(mpi_world_size > 0 ? mpi_world_size : 1);
+}
+
 cudaError_t launch_and_sync(cudaStream_t stream,
                             const CudaKernelResources &resources,
                             KernelType kernel_type,
@@ -144,6 +199,8 @@ void run_host_thread(const ExperimentConfig &config,
                      int host_thread_id,
                      int device_clock_rate_khz,
                      CsvWriter &writer,
+                     ExperimentRuntimeState &runtime_state,
+                     MeasurementStartBarrier &measurement_start_barrier,
                      std::vector<std::string> &thread_errors,
                      std::mutex &thread_errors_mutex) {
     try {
@@ -153,8 +210,12 @@ void run_host_thread(const ExperimentConfig &config,
         throw_on_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
                             "cudaStreamCreateWithFlags");
 
+        cudaEvent_t start_event = nullptr;
+        cudaEvent_t stop_event = nullptr;
         CudaKernelResources resources;
         try {
+            throw_on_cuda_error(cudaEventCreate(&start_event), "cudaEventCreate(start_event)");
+            throw_on_cuda_error(cudaEventCreate(&stop_event), "cudaEventCreate(stop_event)");
             throw_on_cuda_error(allocate_kernel_resources(&resources, default_kernel_memory_elements()),
                                 "allocate_kernel_resources");
 
@@ -187,6 +248,10 @@ void run_host_thread(const ExperimentConfig &config,
                 throw_on_cuda_error(warmup_error, "warm-up kernel");
             }
 
+            if (!measurement_start_barrier.arrive_and_wait(runtime_state)) {
+                throw std::runtime_error("measurement start barrier aborted");
+            }
+
             for (int kernel_index = 0; kernel_index < config.kernels_per_thread; ++kernel_index) {
                 const double arrival_wait_ms = arrival_dist(rng);
                 const std::uint64_t requested_busy_wait_us = kernel_dist(rng);
@@ -194,21 +259,54 @@ void run_host_thread(const ExperimentConfig &config,
                 std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(arrival_wait_ms));
 
                 const std::int64_t submit_time_ns = Timer::now_ns();
-                const cudaError_t launch_error = launch_configurable_kernel(stream,
-                                                                            resources,
-                                                                            config.kernel_type,
-                                                                            requested_busy_wait_us,
-                                                                            device_clock_rate_khz,
-                                                                            config.blocks_x,
-                                                                            config.threads_per_block,
-                                                                            config.grid_z);
+                const std::uint64_t completed_before_rank =
+                    runtime_state.rank_completed_count.load(std::memory_order_acquire);
+                const std::uint64_t submitted_before_rank =
+                    runtime_state.rank_submitted_count.fetch_add(1, std::memory_order_acq_rel);
+                const std::uint64_t active_before_rank =
+                    runtime_state.active_kernels.fetch_add(1, std::memory_order_acq_rel);
+
+                cudaError_t final_error = cudaEventRecord(start_event, stream);
+                if (final_error == cudaSuccess) {
+                    final_error = launch_configurable_kernel(stream,
+                                                             resources,
+                                                             config.kernel_type,
+                                                             requested_busy_wait_us,
+                                                             device_clock_rate_khz,
+                                                             config.blocks_x,
+                                                             config.threads_per_block,
+                                                             config.grid_z);
+                }
                 const std::int64_t launch_return_time_ns = Timer::now_ns();
 
-                cudaError_t final_error = launch_error;
-                if (launch_error == cudaSuccess) {
+                if (final_error == cudaSuccess) {
+                    final_error = cudaEventRecord(stop_event, stream);
+                }
+                if (final_error == cudaSuccess) {
                     final_error = cudaStreamSynchronize(stream);
+                } else {
+                    cudaStreamSynchronize(stream);
                 }
                 const std::int64_t completion_time_ns = Timer::now_ns();
+
+                float cuda_event_elapsed_ms = -1.0f;
+                if (final_error == cudaSuccess) {
+                    const cudaError_t elapsed_error =
+                        cudaEventElapsedTime(&cuda_event_elapsed_ms, start_event, stop_event);
+                    if (elapsed_error != cudaSuccess) {
+                        final_error = elapsed_error;
+                    }
+                }
+
+                runtime_state.active_kernels.fetch_sub(1, std::memory_order_acq_rel);
+                runtime_state.rank_completed_count.fetch_add(1, std::memory_order_acq_rel);
+
+                const std::uint64_t submitted_before_global =
+                    estimate_global_count(submitted_before_rank, mpi_world_size);
+                const std::uint64_t completed_before_global =
+                    estimate_global_count(completed_before_rank, mpi_world_size);
+                const std::int64_t measurement_start_ns =
+                    runtime_state.measurement_start_ns.load(std::memory_order_acquire);
 
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
@@ -218,6 +316,7 @@ void run_host_thread(const ExperimentConfig &config,
                 record.mpi_rank = mpi_rank;
                 record.host_thread_id = host_thread_id;
                 record.kernel_index_in_thread = kernel_index;
+                record.thread_local_kernel_index = kernel_index;
                 record.global_kernel_id = compute_global_kernel_id(config,
                                                                     mpi_rank,
                                                                     host_thread_id,
@@ -231,12 +330,29 @@ void run_host_thread(const ExperimentConfig &config,
                 record.grid_z = config.grid_z;
                 record.total_blocks = total_blocks;
                 record.total_cuda_threads = total_cuda_threads;
+                record.active_kernels_estimate = estimate_global_count(active_before_rank, mpi_world_size);
+                record.submitted_before_global = submitted_before_global;
+                record.completed_before_global = completed_before_global;
+                record.inflight_kernels_estimate =
+                    submitted_before_global >= completed_before_global
+                        ? submitted_before_global - completed_before_global
+                        : 0;
+                record.time_since_experiment_start_us =
+                    static_cast<double>(submit_time_ns - measurement_start_ns) / 1000.0;
+                record.rank_local_submitted_count = submitted_before_rank;
+                record.rank_local_completed_count = completed_before_rank;
                 record.submit_time_ns = submit_time_ns;
                 record.completion_time_ns = completion_time_ns;
+                record.host_submit_time_ns = submit_time_ns;
+                record.host_completion_time_ns = completion_time_ns;
                 record.response_time_us =
                     static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
                 record.launch_overhead_us =
                     static_cast<double>(launch_return_time_ns - submit_time_ns) / 1000.0;
+                record.cuda_event_elapsed_time_us =
+                    cuda_event_elapsed_ms >= 0.0f
+                        ? static_cast<double>(cuda_event_elapsed_ms) * 1000.0
+                        : -1.0;
                 record.cuda_error_code = static_cast<int>(final_error);
                 record.cuda_error_string = cuda_error_message(final_error);
 
@@ -244,17 +360,39 @@ void run_host_thread(const ExperimentConfig &config,
             }
         } catch (...) {
             free_kernel_resources(&resources);
+            if (stop_event != nullptr) {
+                cudaEventDestroy(stop_event);
+            }
+            if (start_event != nullptr) {
+                cudaEventDestroy(start_event);
+            }
             cudaStreamDestroy(stream);
             throw;
         }
 
         const cudaError_t free_error = free_kernel_resources(&resources);
+        const cudaError_t stop_event_destroy_error = cudaEventDestroy(stop_event);
+        const cudaError_t start_event_destroy_error = cudaEventDestroy(start_event);
         const cudaError_t destroy_error = cudaStreamDestroy(stream);
         if (free_error != cudaSuccess) {
             record_thread_error(thread_errors,
                                 thread_errors_mutex,
                                 host_thread_id,
                                 "cudaFree failed: " + cuda_error_message(free_error));
+        }
+        if (stop_event_destroy_error != cudaSuccess) {
+            record_thread_error(thread_errors,
+                                thread_errors_mutex,
+                                host_thread_id,
+                                "cudaEventDestroy(stop_event) failed: " +
+                                    cuda_error_message(stop_event_destroy_error));
+        }
+        if (start_event_destroy_error != cudaSuccess) {
+            record_thread_error(thread_errors,
+                                thread_errors_mutex,
+                                host_thread_id,
+                                "cudaEventDestroy(start_event) failed: " +
+                                    cuda_error_message(start_event_destroy_error));
         }
         if (destroy_error != cudaSuccess) {
             record_thread_error(thread_errors,
@@ -263,8 +401,10 @@ void run_host_thread(const ExperimentConfig &config,
                                 "cudaStreamDestroy failed: " + cuda_error_message(destroy_error));
         }
     } catch (const std::exception &ex) {
+        measurement_start_barrier.abort();
         record_thread_error(thread_errors, thread_errors_mutex, host_thread_id, ex.what());
     } catch (...) {
+        measurement_start_barrier.abort();
         record_thread_error(thread_errors, thread_errors_mutex, host_thread_id, "unknown exception");
     }
 }
@@ -302,13 +442,14 @@ void run_experiment(const ExperimentConfig &config,
 
     std::filesystem::create_directories(config.output_dir);
     const std::filesystem::path csv_path = output_file_path(config, mpi_rank, run_timestamp);
-    CsvWriter writer(csv_path.string());
+    CsvWriter writer(csv_path.string(), static_cast<std::uint64_t>(config.flush_every));
 
     if (mpi_rank == 0) {
         std::cerr << "Running experiment '" << config.experiment_name
                   << "' with sync-mode=" << sync_mode_to_string(config.sync_mode)
                   << ", kernel-type=" << kernel_type_to_string(config.kernel_type)
                   << ", warmup-kernels=" << config.warmup_kernels
+                  << ", flush-every=" << config.flush_every
                   << ", output-dir=" << config.output_dir << '\n';
     }
     std::cerr << "[rank " << mpi_rank << "] writing " << csv_path.string() << '\n';
@@ -318,6 +459,8 @@ void run_experiment(const ExperimentConfig &config,
 
     std::vector<std::string> thread_errors;
     std::mutex thread_errors_mutex;
+    ExperimentRuntimeState runtime_state;
+    MeasurementStartBarrier measurement_start_barrier(config.threads_per_process);
 
     for (int host_thread_id = 0; host_thread_id < config.threads_per_process; ++host_thread_id) {
         workers.emplace_back(run_host_thread,
@@ -327,6 +470,8 @@ void run_experiment(const ExperimentConfig &config,
                              host_thread_id,
                              prop.clockRate,
                              std::ref(writer),
+                             std::ref(runtime_state),
+                             std::ref(measurement_start_barrier),
                              std::ref(thread_errors),
                              std::ref(thread_errors_mutex));
     }

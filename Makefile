@@ -56,6 +56,7 @@ run: $(TARGET)
 		--threads-per-process 2 \
 		--kernels-per-thread 10 \
 		--warmup-kernels 20 \
+		--flush-every 1000 \
 		--arrival-min-ms 1 \
 		--arrival-max-ms 5 \
 		--kernel-min-us 100 \
