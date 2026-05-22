@@ -9,6 +9,7 @@ INCLUDE_DIRS := \
 	$(SRC_DIR)/cuda \
 	$(SRC_DIR)/experiment \
 	$(SRC_DIR)/io \
+	$(SRC_DIR)/telemetry \
 	$(SRC_DIR)/timing
 
 CUDA_HOME ?= /usr/local/cuda
@@ -20,6 +21,7 @@ CPP_SRCS := main.cpp \
 	src/io/csv_writer.cpp \
 	src/config/config.cpp \
 	src/config/env_loader.cpp \
+	src/telemetry/gpu_telemetry.cpp \
 	src/timing/timer.cpp
 
 CU_SRCS := src/cuda/cuda_kernels.cu
@@ -57,6 +59,8 @@ run: $(TARGET)
 		--kernels-per-thread 10 \
 		--warmup-kernels 20 \
 		--flush-every 1000 \
+		--gpu-telemetry on \
+		--telemetry-interval-ms 1000 \
 		--arrival-min-ms 1 \
 		--arrival-max-ms 5 \
 		--kernel-min-us 100 \

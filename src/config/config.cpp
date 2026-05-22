@@ -134,6 +134,10 @@ bool validate_config(const ExperimentConfig &config, std::string &error) {
         error = "--flush-every must be greater than zero";
         return false;
     }
+    if (config.telemetry_interval_ms <= 0) {
+        error = "--telemetry-interval-ms must be greater than zero";
+        return false;
+    }
     if (config.arrival_min_ms < 0.0 || config.arrival_max_ms < 0.0) {
         error = "Arrival ranges must be non-negative";
         return false;
@@ -232,6 +236,24 @@ bool parse_command_line(int argc,
                 error = error.empty() ? "Invalid value for --flush-every" : error;
                 return false;
             }
+        } else if (arg == "--gpu-telemetry") {
+            if (!require_value(argc, argv, i, value, error)) {
+                return false;
+            }
+            if (value == "on") {
+                config.gpu_telemetry_enabled = true;
+            } else if (value == "off") {
+                config.gpu_telemetry_enabled = false;
+            } else {
+                error = "--gpu-telemetry must be either on or off";
+                return false;
+            }
+        } else if (arg == "--telemetry-interval-ms") {
+            if (!require_value(argc, argv, i, value, error) ||
+                !parse_int_value(value, config.telemetry_interval_ms)) {
+                error = error.empty() ? "Invalid value for --telemetry-interval-ms" : error;
+                return false;
+            }
         } else if (arg == "--arrival-min-ms") {
             if (!require_value(argc, argv, i, value, error) || !parse_double_value(value, config.arrival_min_ms)) {
                 error = error.empty() ? "Invalid value for --arrival-min-ms" : error;
@@ -323,6 +345,8 @@ std::string usage(const char *program_name) {
         << "  --kernels-per-thread K      Sequential CUDA kernel requests per host thread (default: 1)\n"
         << "  --warmup-kernels W          Warm-up kernels per host thread, excluded from CSV (default: 20)\n"
         << "  --flush-every N             Flush CSV output every N rows per rank (default: 1000)\n"
+        << "  --gpu-telemetry on|off      Collect nvidia-smi telemetry in a side CSV (default: on)\n"
+        << "  --telemetry-interval-ms MS  GPU telemetry sampling interval (default: 1000)\n"
         << "  --arrival-min-ms a          Minimum inter-arrival wait in milliseconds (default: 1)\n"
         << "  --arrival-max-ms b          Maximum inter-arrival wait in milliseconds (default: 1)\n"
         << "  --kernel-min-us d           Minimum requested busy-wait duration in microseconds (default: 100)\n"

@@ -2,6 +2,7 @@
 
 #include "csv_writer.hpp"
 #include "cuda_kernels.cuh"
+#include "gpu_telemetry.hpp"
 #include "timer.hpp"
 
 #include <cuda_runtime.h>
@@ -112,6 +113,24 @@ std::filesystem::path output_file_path(const ExperimentConfig &config,
     const std::string safe_name = sanitize_filename_component(config.experiment_name);
     std::ostringstream filename;
     filename << "resultados_experimentos_"
+             << safe_name
+             << "_seed_"
+             << config.seed
+             << "_"
+             << run_timestamp
+             << "_rank_"
+             << mpi_rank
+             << ".csv";
+
+    return std::filesystem::path(config.output_dir) / filename.str();
+}
+
+std::filesystem::path telemetry_file_path(const ExperimentConfig &config,
+                                          int mpi_rank,
+                                          const std::string &run_timestamp) {
+    const std::string safe_name = sanitize_filename_component(config.experiment_name);
+    std::ostringstream filename;
+    filename << "gpu_telemetry_"
              << safe_name
              << "_seed_"
              << config.seed
@@ -442,7 +461,12 @@ void run_experiment(const ExperimentConfig &config,
 
     std::filesystem::create_directories(config.output_dir);
     const std::filesystem::path csv_path = output_file_path(config, mpi_rank, run_timestamp);
+    const std::filesystem::path telemetry_path = telemetry_file_path(config, mpi_rank, run_timestamp);
     CsvWriter writer(csv_path.string(), static_cast<std::uint64_t>(config.flush_every));
+    GpuTelemetryMonitor gpu_telemetry(config,
+                                      mpi_world_size,
+                                      mpi_rank,
+                                      telemetry_path.string());
 
     if (mpi_rank == 0) {
         std::cerr << "Running experiment '" << config.experiment_name
@@ -450,9 +474,13 @@ void run_experiment(const ExperimentConfig &config,
                   << ", kernel-type=" << kernel_type_to_string(config.kernel_type)
                   << ", warmup-kernels=" << config.warmup_kernels
                   << ", flush-every=" << config.flush_every
+                  << ", gpu-telemetry=" << (config.gpu_telemetry_enabled ? "on" : "off")
                   << ", output-dir=" << config.output_dir << '\n';
     }
     std::cerr << "[rank " << mpi_rank << "] writing " << csv_path.string() << '\n';
+    if (gpu_telemetry.enabled()) {
+        std::cerr << "[rank " << mpi_rank << "] writing " << gpu_telemetry.path() << '\n';
+    }
 
     std::vector<std::thread> workers;
     workers.reserve(static_cast<std::size_t>(config.threads_per_process));
@@ -461,6 +489,9 @@ void run_experiment(const ExperimentConfig &config,
     std::mutex thread_errors_mutex;
     ExperimentRuntimeState runtime_state;
     MeasurementStartBarrier measurement_start_barrier(config.threads_per_process);
+
+    gpu_telemetry.sample_once("before");
+    gpu_telemetry.start();
 
     for (int host_thread_id = 0; host_thread_id < config.threads_per_process; ++host_thread_id) {
         workers.emplace_back(run_host_thread,
@@ -479,6 +510,9 @@ void run_experiment(const ExperimentConfig &config,
     for (auto &worker : workers) {
         worker.join();
     }
+
+    gpu_telemetry.stop();
+    gpu_telemetry.sample_once("after");
 
     writer.flush();
 
