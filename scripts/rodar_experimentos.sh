@@ -19,38 +19,68 @@ WARMUP_KERNELS="${WARMUP_KERNELS:-20}"
 FLUSH_EVERY="${FLUSH_EVERY:-1000}"
 GPU_TELEMETRY="${GPU_TELEMETRY:-on}"
 TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-1000}"
+EXPERIMENT_CONFIG="${EXPERIMENT_CONFIG:-sweep_padrao}"
+EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/${EXPERIMENT_CONFIG}.json}"
+
+if [[ ! -f "${EXPERIMENT_CONFIG_PATH}" ]]; then
+  echo "Arquivo de configuracao de experimento nao encontrado: ${EXPERIMENT_CONFIG_PATH}" >&2
+  exit 1
+fi
+
+eval "$(
+  python3 - "${EXPERIMENT_CONFIG_PATH}" <<'PY'
+import json
+import shlex
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as file:
+    config = json.load(file)
+
+
+def require(name):
+    if name not in config:
+        raise SystemExit(f"Campo obrigatorio ausente no JSON: {name}")
+    return config[name]
+
+
+def bash_array(name, values):
+    print(f"{name}=({' '.join(shlex.quote(str(value)) for value in values)})")
+
+
+def bash_scalar(name, value):
+    print(f"{name}={shlex.quote(str(value))}")
+
+
+def range_value(item, min_key, max_key):
+    if isinstance(item, str):
+        return item
+    return f"{item[min_key]}:{item[max_key]}"
+
+
+bash_array("MPI_RANKS", require("mpi_ranks"))
+bash_array("SEEDS", require("seeds"))
+bash_array("THREADS_PER_PROCESS", require("threads_per_process"))
+bash_scalar("KERNELS_PER_THREAD", require("kernels_per_thread"))
+bash_array("BLOCKS_X", require("blocks_x"))
+bash_array("THREADS_PER_BLOCK", require("threads_per_block"))
+bash_scalar("GRID_Z", require("grid_z"))
+bash_array(
+    "KERNEL_RANGES",
+    [range_value(item, "min_us", "max_us") for item in require("kernel_ranges")],
+)
+bash_array(
+    "ARRIVAL_RANGES",
+    [range_value(item, "min_ms", "max_ms") for item in require("arrival_ranges")],
+)
+bash_array("KERNEL_TYPES", require("kernel_types"))
+PY
+)"
 
 mkdir -p "${OUTPUT_DIR}"
 make
 
-MPI_RANKS=(1 2 4)
-
-SEEDS=(42)
-
-THREADS_PER_PROCESS=(1 2 4 8)
-
-KERNELS_PER_THREAD=300
-
-BLOCKS_X=(1 4 8 16 32 64 128 256)
-
-THREADS_PER_BLOCK=(32 64 128 256 512)
-
-GRID_Z=1
-
-KERNEL_RANGES=(
-  "100:500"
-)
-
-ARRIVAL_RANGES=(
-  "1:5"
-)
-
-KERNEL_TYPES=(
-  "busy_wait"
-  "compute"
-  "memory"
-  "mixed"
-)
+echo "Usando configuracao de experimento: ${EXPERIMENT_CONFIG_PATH}"
 
 for ranks in "${MPI_RANKS[@]}"; do
   for threads in "${THREADS_PER_PROCESS[@]}"; do
