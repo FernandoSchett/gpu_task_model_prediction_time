@@ -55,6 +55,7 @@ run: $(TARGET)
 	mpirun -np 1 ./$(TARGET) \
 		--threads-per-process 2 \
 		--kernels-per-thread 10 \
+		--warmup-kernels 20 \
 		--arrival-min-ms 1 \
 		--arrival-max-ms 5 \
 		--kernel-min-us 100 \
@@ -62,6 +63,7 @@ run: $(TARGET)
 		--blocks-x 16 \
 		--threads-per-block 128 \
 		--grid-z 1 \
+		--kernel-type busy_wait \
 		--experiment-name make_run
 
 clean:

@@ -126,6 +126,10 @@ bool validate_config(const ExperimentConfig &config, std::string &error) {
         error = "--kernels-per-thread must be greater than zero";
         return false;
     }
+    if (config.warmup_kernels < 0) {
+        error = "--warmup-kernels must be zero or greater";
+        return false;
+    }
     if (config.arrival_min_ms < 0.0 || config.arrival_max_ms < 0.0) {
         error = "Arrival ranges must be non-negative";
         return false;
@@ -165,6 +169,26 @@ bool validate_config(const ExperimentConfig &config, std::string &error) {
     return true;
 }
 
+bool parse_kernel_type_value(const std::string &value, KernelType &kernel_type) {
+    if (value == "busy_wait") {
+        kernel_type = KernelType::BusyWait;
+        return true;
+    }
+    if (value == "compute") {
+        kernel_type = KernelType::Compute;
+        return true;
+    }
+    if (value == "memory") {
+        kernel_type = KernelType::Memory;
+        return true;
+    }
+    if (value == "mixed") {
+        kernel_type = KernelType::Mixed;
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 bool parse_command_line(int argc,
@@ -192,6 +216,11 @@ bool parse_command_line(int argc,
         } else if (arg == "--kernels-per-thread") {
             if (!require_value(argc, argv, i, value, error) || !parse_int_value(value, config.kernels_per_thread)) {
                 error = error.empty() ? "Invalid value for --kernels-per-thread" : error;
+                return false;
+            }
+        } else if (arg == "--warmup-kernels") {
+            if (!require_value(argc, argv, i, value, error) || !parse_int_value(value, config.warmup_kernels)) {
+                error = error.empty() ? "Invalid value for --warmup-kernels" : error;
                 return false;
             }
         } else if (arg == "--arrival-min-ms") {
@@ -259,6 +288,14 @@ bool parse_command_line(int argc,
                 error = "--sync-mode must be either blocking or spin";
                 return false;
             }
+        } else if (arg == "--kernel-type") {
+            if (!require_value(argc, argv, i, value, error)) {
+                return false;
+            }
+            if (!parse_kernel_type_value(value, config.kernel_type)) {
+                error = "--kernel-type must be one of: busy_wait, compute, memory, mixed";
+                return false;
+            }
         } else {
             error = "Unknown argument: " + arg;
             return false;
@@ -275,6 +312,7 @@ std::string usage(const char *program_name) {
         << "Options:\n"
         << "  --threads-per-process T     Host threads created by each MPI rank (default: 1)\n"
         << "  --kernels-per-thread K      Sequential CUDA kernel requests per host thread (default: 1)\n"
+        << "  --warmup-kernels W          Warm-up kernels per host thread, excluded from CSV (default: 20)\n"
         << "  --arrival-min-ms a          Minimum inter-arrival wait in milliseconds (default: 1)\n"
         << "  --arrival-max-ms b          Maximum inter-arrival wait in milliseconds (default: 1)\n"
         << "  --kernel-min-us d           Minimum requested busy-wait duration in microseconds (default: 100)\n"
@@ -287,10 +325,25 @@ std::string usage(const char *program_name) {
         << "  --output-dir DIR            Output directory (default: OUTPUT_DIR from .env or resultados)\n"
         << "  --device DEVICE_ID          CUDA device ID (default: DEFAULT_DEVICE from .env or 0)\n"
         << "  --sync-mode blocking|spin   CUDA host synchronization mode (default: blocking)\n"
+        << "  --kernel-type TYPE          busy_wait, compute, memory, or mixed (default: busy_wait)\n"
         << "  --help                      Show this message\n";
     return out.str();
 }
 
 std::string sync_mode_to_string(SyncMode mode) {
     return mode == SyncMode::Blocking ? "blocking" : "spin";
+}
+
+std::string kernel_type_to_string(KernelType type) {
+    switch (type) {
+        case KernelType::BusyWait:
+            return "busy_wait";
+        case KernelType::Compute:
+            return "compute";
+        case KernelType::Memory:
+            return "memory";
+        case KernelType::Mixed:
+            return "mixed";
+    }
+    return "unknown";
 }

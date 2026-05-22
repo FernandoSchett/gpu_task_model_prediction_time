@@ -39,6 +39,7 @@ CsvWriter::CsvWriter(const std::string &path) : file_(path) {
 
     file_ << "experiment_name,"
           << "global_seed,"
+          << "warmup_kernels,"
           << "mpi_world_size,"
           << "mpi_rank,"
           << "host_thread_id,"
@@ -47,6 +48,7 @@ CsvWriter::CsvWriter(const std::string &path) : file_(path) {
           << "cuda_device_id,"
           << "arrival_wait_ms,"
           << "requested_busy_wait_us,"
+          << "kernel_type,"
           << "blocks_x,"
           << "threads_per_block,"
           << "grid_z,"
@@ -65,6 +67,7 @@ void CsvWriter::write(const KernelRecord &record) {
 
     file_ << csv_escape(record.experiment_name) << ','
           << record.global_seed << ','
+          << record.warmup_kernels << ','
           << record.mpi_world_size << ','
           << record.mpi_rank << ','
           << record.host_thread_id << ','
@@ -73,6 +76,7 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.cuda_device_id << ','
           << std::fixed << std::setprecision(6) << record.arrival_wait_ms << ','
           << record.requested_busy_wait_us << ','
+          << csv_escape(record.kernel_type) << ','
           << record.blocks_x << ','
           << record.threads_per_block << ','
           << record.grid_z << ','

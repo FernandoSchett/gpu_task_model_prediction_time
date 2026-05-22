@@ -24,6 +24,7 @@ namespace {
 
 constexpr std::uint64_t kRankSeedPrime = 1000003ULL;
 constexpr std::uint64_t kThreadSeedPrime = 1000033ULL;
+constexpr std::uint64_t kWarmupSeedSalt = 0x9E3779B97F4A7C15ULL;
 
 std::string cuda_error_message(cudaError_t error) {
     return std::string(cudaGetErrorString(error));
@@ -115,6 +116,28 @@ void record_thread_error(std::vector<std::string> &errors,
     errors.push_back(out.str());
 }
 
+cudaError_t launch_and_sync(cudaStream_t stream,
+                            const CudaKernelResources &resources,
+                            KernelType kernel_type,
+                            std::uint64_t requested_busy_wait_us,
+                            int device_clock_rate_khz,
+                            int blocks_x,
+                            int threads_per_block,
+                            int grid_z) {
+    const cudaError_t launch_error = launch_configurable_kernel(stream,
+                                                                resources,
+                                                                kernel_type,
+                                                                requested_busy_wait_us,
+                                                                device_clock_rate_khz,
+                                                                blocks_x,
+                                                                threads_per_block,
+                                                                grid_z);
+    if (launch_error != cudaSuccess) {
+        return launch_error;
+    }
+    return cudaStreamSynchronize(stream);
+}
+
 void run_host_thread(const ExperimentConfig &config,
                      int mpi_world_size,
                      int mpi_rank,
@@ -130,13 +153,17 @@ void run_host_thread(const ExperimentConfig &config,
         throw_on_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
                             "cudaStreamCreateWithFlags");
 
-        unsigned long long *sink = nullptr;
+        CudaKernelResources resources;
         try {
-            throw_on_cuda_error(allocate_busy_wait_sink(&sink), "allocate_busy_wait_sink");
+            throw_on_cuda_error(allocate_kernel_resources(&resources, default_kernel_memory_elements()),
+                                "allocate_kernel_resources");
 
-            std::mt19937_64 rng(config.seed +
-                                static_cast<std::uint64_t>(mpi_rank) * kRankSeedPrime +
-                                static_cast<std::uint64_t>(host_thread_id) * kThreadSeedPrime);
+            const std::uint64_t thread_seed =
+                config.seed +
+                static_cast<std::uint64_t>(mpi_rank) * kRankSeedPrime +
+                static_cast<std::uint64_t>(host_thread_id) * kThreadSeedPrime;
+            std::mt19937_64 rng(thread_seed);
+            std::mt19937_64 warmup_rng(thread_seed ^ kWarmupSeedSalt);
             std::uniform_real_distribution<double> arrival_dist(config.arrival_min_ms,
                                                                 config.arrival_max_ms);
             std::uniform_int_distribution<std::uint64_t> kernel_dist(config.kernel_min_us,
@@ -147,6 +174,19 @@ void run_host_thread(const ExperimentConfig &config,
             const std::uint64_t total_cuda_threads =
                 total_blocks * static_cast<std::uint64_t>(config.threads_per_block);
 
+            for (int warmup_index = 0; warmup_index < config.warmup_kernels; ++warmup_index) {
+                const std::uint64_t warmup_duration_us = kernel_dist(warmup_rng);
+                const cudaError_t warmup_error = launch_and_sync(stream,
+                                                                 resources,
+                                                                 config.kernel_type,
+                                                                 warmup_duration_us,
+                                                                 device_clock_rate_khz,
+                                                                 config.blocks_x,
+                                                                 config.threads_per_block,
+                                                                 config.grid_z);
+                throw_on_cuda_error(warmup_error, "warm-up kernel");
+            }
+
             for (int kernel_index = 0; kernel_index < config.kernels_per_thread; ++kernel_index) {
                 const double arrival_wait_ms = arrival_dist(rng);
                 const std::uint64_t requested_busy_wait_us = kernel_dist(rng);
@@ -154,13 +194,14 @@ void run_host_thread(const ExperimentConfig &config,
                 std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(arrival_wait_ms));
 
                 const std::int64_t submit_time_ns = Timer::now_ns();
-                const cudaError_t launch_error = launch_busy_wait_kernel(stream,
-                                                                         sink,
-                                                                         requested_busy_wait_us,
-                                                                         device_clock_rate_khz,
-                                                                         config.blocks_x,
-                                                                         config.threads_per_block,
-                                                                         config.grid_z);
+                const cudaError_t launch_error = launch_configurable_kernel(stream,
+                                                                            resources,
+                                                                            config.kernel_type,
+                                                                            requested_busy_wait_us,
+                                                                            device_clock_rate_khz,
+                                                                            config.blocks_x,
+                                                                            config.threads_per_block,
+                                                                            config.grid_z);
                 const std::int64_t launch_return_time_ns = Timer::now_ns();
 
                 cudaError_t final_error = launch_error;
@@ -172,6 +213,7 @@ void run_host_thread(const ExperimentConfig &config,
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
                 record.global_seed = config.seed;
+                record.warmup_kernels = config.warmup_kernels;
                 record.mpi_world_size = mpi_world_size;
                 record.mpi_rank = mpi_rank;
                 record.host_thread_id = host_thread_id;
@@ -183,6 +225,7 @@ void run_host_thread(const ExperimentConfig &config,
                 record.cuda_device_id = config.device_id;
                 record.arrival_wait_ms = arrival_wait_ms;
                 record.requested_busy_wait_us = requested_busy_wait_us;
+                record.kernel_type = kernel_type_to_string(config.kernel_type);
                 record.blocks_x = config.blocks_x;
                 record.threads_per_block = config.threads_per_block;
                 record.grid_z = config.grid_z;
@@ -200,12 +243,12 @@ void run_host_thread(const ExperimentConfig &config,
                 writer.write(record);
             }
         } catch (...) {
-            free_busy_wait_sink(sink);
+            free_kernel_resources(&resources);
             cudaStreamDestroy(stream);
             throw;
         }
 
-        const cudaError_t free_error = free_busy_wait_sink(sink);
+        const cudaError_t free_error = free_kernel_resources(&resources);
         const cudaError_t destroy_error = cudaStreamDestroy(stream);
         if (free_error != cudaSuccess) {
             record_thread_error(thread_errors,
@@ -264,6 +307,8 @@ void run_experiment(const ExperimentConfig &config,
     if (mpi_rank == 0) {
         std::cerr << "Running experiment '" << config.experiment_name
                   << "' with sync-mode=" << sync_mode_to_string(config.sync_mode)
+                  << ", kernel-type=" << kernel_type_to_string(config.kernel_type)
+                  << ", warmup-kernels=" << config.warmup_kernels
                   << ", output-dir=" << config.output_dir << '\n';
     }
     std::cerr << "[rank " << mpi_rank << "] writing " << csv_path.string() << '\n';

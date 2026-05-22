@@ -9,6 +9,7 @@
 struct KernelRecord {
     std::string experiment_name;
     std::uint64_t global_seed = 0;
+    int warmup_kernels = 0;
     int mpi_world_size = 0;
     int mpi_rank = 0;
     int host_thread_id = 0;
@@ -17,6 +18,7 @@ struct KernelRecord {
     int cuda_device_id = 0;
     double arrival_wait_ms = 0.0;
     std::uint64_t requested_busy_wait_us = 0;
+    std::string kernel_type;
     int blocks_x = 0;
     int threads_per_block = 0;
     int grid_z = 0;
