@@ -1,20 +1,28 @@
 {
-  "name": "sweep_padrao",
-  "description": "Sweep principal para avaliar slowdown com MPI ranks, threads de host, configuracoes CUDA e tipos de kernel.",
+  "name": "sweep_final",
+  "description": "Sweep principal para avaliar slowdown em regimes leve e saturado, variando MPI ranks, threads de host, configuracoes CUDA e tipos de kernel.",
   "mpi_ranks": [1, 2, 4],
-  "seeds": [42],
+  "seeds": [67],
   "threads_per_process": [1, 2, 4, 8],
   "kernels_per_thread": 300,
-  "blocks_x": [1, 4, 8, 16, 32, 64, 128, 256],
-  "threads_per_block": [32, 64, 128, 256, 512],
+  "blocks_x": [4, 8, 16, 32, 64, 128, 256],
+  "threads_per_block": [32, 64, 128, 256],
   "grid_z": 1,
   "kernel_ranges": [
     {
       "min_us": 100,
       "max_us": 500
+    },
+    {
+      "min_us": 500,
+      "max_us": 2000
     }
   ],
   "arrival_ranges": [
+    {
+      "min_ms": 0,
+      "max_ms": 0
+    },
     {
       "min_ms": 1,
       "max_ms": 5

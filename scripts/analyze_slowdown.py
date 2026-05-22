@@ -4,7 +4,9 @@ from pathlib import Path
 import pandas as pd
 
 
-RESULTS_DIR = Path("resultados")
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+RESULTS_DIR = REPO_ROOT / "resultados"
 REQUIRED_COLUMNS = {
     "experiment_name",
     "cuda_error_code",
