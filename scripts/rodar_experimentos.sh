@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -21,11 +25,11 @@ make
 
 MPI_RANKS=(1 2 4)
 
-SEEDS=(1 2 3 4 5 6 7 8 9 10)
+SEEDS=(42)
 
 THREADS_PER_PROCESS=(1 2 4 8)
 
-KERNELS_PER_THREAD=100
+KERNELS_PER_THREAD=300
 
 BLOCKS_X=(1 4 8 16 32 64 128 256)
 
@@ -34,17 +38,11 @@ THREADS_PER_BLOCK=(32 64 128 256 512)
 GRID_Z=1
 
 KERNEL_RANGES=(
-  "50:100"
   "100:500"
-  "500:2000"
-  "2000:10000"
 )
 
 ARRIVAL_RANGES=(
-  "0:0"
   "1:5"
-  "5:20"
-  "20:100"
 )
 
 KERNEL_TYPES=(
