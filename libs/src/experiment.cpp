@@ -35,6 +35,14 @@ struct ExperimentRuntimeState {
     std::atomic<std::int64_t> measurement_start_ns{0};
 };
 
+struct DeviceInfo {
+    std::string gpu_name;
+    int sm_count = 0;
+    int clock_rate_khz = 0;
+    int cuda_runtime_version = 0;
+    int cuda_driver_version = 0;
+};
+
 class MeasurementStartBarrier {
 public:
     explicit MeasurementStartBarrier(int participants)
@@ -190,6 +198,33 @@ std::uint64_t estimate_global_count(std::uint64_t rank_local_count, int mpi_worl
     return rank_local_count * static_cast<std::uint64_t>(mpi_world_size > 0 ? mpi_world_size : 1);
 }
 
+std::uint64_t ceil_div(std::uint64_t numerator, std::uint64_t denominator) {
+    return denominator == 0 ? 0 : (numerator + denominator - 1) / denominator;
+}
+
+DeviceInfo collect_device_info(const ExperimentConfig &config, const cudaDeviceProp &prop) {
+    DeviceInfo info;
+    info.gpu_name = prop.name;
+    info.sm_count = prop.multiProcessorCount;
+
+    cudaError_t error = cudaDeviceGetAttribute(&info.clock_rate_khz,
+                                               cudaDevAttrClockRate,
+                                               config.device_id);
+    throw_on_cuda_error(error, "cudaDeviceGetAttribute(cudaDevAttrClockRate)");
+
+    error = cudaDeviceGetAttribute(&info.sm_count,
+                                   cudaDevAttrMultiProcessorCount,
+                                   config.device_id);
+    throw_on_cuda_error(error, "cudaDeviceGetAttribute(cudaDevAttrMultiProcessorCount)");
+
+    throw_on_cuda_error(cudaRuntimeGetVersion(&info.cuda_runtime_version),
+                        "cudaRuntimeGetVersion");
+    throw_on_cuda_error(cudaDriverGetVersion(&info.cuda_driver_version),
+                        "cudaDriverGetVersion");
+
+    return info;
+}
+
 cudaError_t launch_and_sync(cudaStream_t stream,
                             const CudaKernelResources &resources,
                             KernelType kernel_type,
@@ -216,7 +251,7 @@ void run_host_thread(const ExperimentConfig &config,
                      int mpi_world_size,
                      int mpi_rank,
                      int host_thread_id,
-                     int device_clock_rate_khz,
+                     const DeviceInfo &device_info,
                      CsvWriter &writer,
                      ExperimentRuntimeState &runtime_state,
                      MeasurementStartBarrier &measurement_start_barrier,
@@ -260,7 +295,7 @@ void run_host_thread(const ExperimentConfig &config,
                                                                  resources,
                                                                  config.kernel_type,
                                                                  warmup_duration_us,
-                                                                 device_clock_rate_khz,
+                                                                 device_info.clock_rate_khz,
                                                                  config.blocks_x,
                                                                  config.threads_per_block,
                                                                  config.grid_z);
@@ -291,7 +326,7 @@ void run_host_thread(const ExperimentConfig &config,
                                                              resources,
                                                              config.kernel_type,
                                                              requested_busy_wait_us,
-                                                             device_clock_rate_khz,
+                                                             device_info.clock_rate_khz,
                                                              config.blocks_x,
                                                              config.threads_per_block,
                                                              config.grid_z);
@@ -324,8 +359,22 @@ void run_host_thread(const ExperimentConfig &config,
                     estimate_global_count(submitted_before_rank, mpi_world_size);
                 const std::uint64_t completed_before_global =
                     estimate_global_count(completed_before_rank, mpi_world_size);
+                const std::uint64_t active_before_global =
+                    estimate_global_count(active_before_rank, mpi_world_size);
                 const std::int64_t measurement_start_ns =
                     runtime_state.measurement_start_ns.load(std::memory_order_acquire);
+                const std::uint64_t warps_per_block =
+                    ceil_div(static_cast<std::uint64_t>(config.threads_per_block), 32ULL);
+                const std::uint64_t total_warps = total_blocks * warps_per_block;
+                const double estimated_waves =
+                    device_info.sm_count > 0
+                        ? static_cast<double>(
+                              static_cast<std::uint64_t>(config.blocks_x) *
+                              static_cast<std::uint64_t>(config.grid_z)) /
+                              static_cast<double>(device_info.sm_count)
+                        : 0.0;
+                const double response_time_us =
+                    static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
 
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
@@ -333,6 +382,8 @@ void run_host_thread(const ExperimentConfig &config,
                 record.warmup_kernels = config.warmup_kernels;
                 record.mpi_world_size = mpi_world_size;
                 record.mpi_rank = mpi_rank;
+                record.threads_per_process = config.threads_per_process;
+                record.kernels_per_thread = config.kernels_per_thread;
                 record.host_thread_id = host_thread_id;
                 record.kernel_index_in_thread = kernel_index;
                 record.thread_local_kernel_index = kernel_index;
@@ -344,18 +395,28 @@ void run_host_thread(const ExperimentConfig &config,
                 record.arrival_wait_ms = arrival_wait_ms;
                 record.requested_busy_wait_us = requested_busy_wait_us;
                 record.kernel_type = kernel_type_to_string(config.kernel_type);
+                record.gpu_name = device_info.gpu_name;
+                record.cuda_runtime_version = device_info.cuda_runtime_version;
+                record.cuda_driver_version = device_info.cuda_driver_version;
+                record.sm_count = device_info.sm_count;
+                record.device_clock_rate_khz = device_info.clock_rate_khz;
                 record.blocks_x = config.blocks_x;
                 record.threads_per_block = config.threads_per_block;
                 record.grid_z = config.grid_z;
                 record.total_blocks = total_blocks;
                 record.total_cuda_threads = total_cuda_threads;
-                record.active_kernels_estimate = estimate_global_count(active_before_rank, mpi_world_size);
+                record.total_warps = total_warps;
+                record.warps_per_block = static_cast<int>(warps_per_block);
+                record.estimated_waves = estimated_waves;
+                record.active_kernels_estimate = active_before_global;
                 record.submitted_before_global = submitted_before_global;
                 record.completed_before_global = completed_before_global;
                 record.inflight_kernels_estimate =
                     submitted_before_global >= completed_before_global
                         ? submitted_before_global - completed_before_global
                         : 0;
+                record.concurrent_kernels_estimate =
+                    active_before_global + static_cast<std::uint64_t>(mpi_world_size > 0 ? mpi_world_size : 1);
                 record.time_since_experiment_start_us =
                     static_cast<double>(submit_time_ns - measurement_start_ns) / 1000.0;
                 record.rank_local_submitted_count = submitted_before_rank;
@@ -364,14 +425,19 @@ void run_host_thread(const ExperimentConfig &config,
                 record.completion_time_ns = completion_time_ns;
                 record.host_submit_time_ns = submit_time_ns;
                 record.host_completion_time_ns = completion_time_ns;
-                record.response_time_us =
-                    static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
+                record.response_time_us = response_time_us;
                 record.launch_overhead_us =
                     static_cast<double>(launch_return_time_ns - submit_time_ns) / 1000.0;
                 record.cuda_event_elapsed_time_us =
                     cuda_event_elapsed_ms >= 0.0f
                         ? static_cast<double>(cuda_event_elapsed_ms) * 1000.0
                         : -1.0;
+                record.queueing_delay_us =
+                    response_time_us - static_cast<double>(requested_busy_wait_us);
+                record.slowdown =
+                    requested_busy_wait_us > 0
+                        ? response_time_us / static_cast<double>(requested_busy_wait_us)
+                        : 0.0;
                 record.cuda_error_code = static_cast<int>(final_error);
                 record.cuda_error_string = cuda_error_message(final_error);
 
@@ -456,6 +522,7 @@ void run_experiment(const ExperimentConfig &config,
     cudaDeviceProp prop{};
     throw_on_cuda_error(cudaGetDeviceProperties(&prop, config.device_id), "cudaGetDeviceProperties");
     validate_launch_config(config, prop);
+    const DeviceInfo device_info = collect_device_info(config, prop);
 
     throw_on_cuda_error(cudaFree(nullptr), "CUDA context initialization");
 
@@ -499,7 +566,7 @@ void run_experiment(const ExperimentConfig &config,
                              mpi_world_size,
                              mpi_rank,
                              host_thread_id,
-                             prop.clockRate,
+                             std::cref(device_info),
                              std::ref(writer),
                              std::ref(runtime_state),
                              std::ref(measurement_start_barrier),

@@ -3,4 +3,7 @@ main
 *.csv
 resultados/
 build/
+build-cmake/
+__pycache__/
+scripts/__pycache__/
 .env.local

@@ -1,5 +1,6 @@
+ifeq ($(origin CXX),default)
 CXX := mpicxx
-NVCC := nvcc
+endif
 
 TARGET := main
 BUILD_DIR := build
@@ -10,6 +11,7 @@ INCLUDE_DIRS := \
 	$(LIBS_DIR)/include
 
 CUDA_HOME ?= /usr/local/cuda
+NVCC ?= $(CUDA_HOME)/bin/nvcc
 CUDA_INC ?= $(CUDA_HOME)/include
 CUDA_LIBDIR ?= $(CUDA_HOME)/lib64
 

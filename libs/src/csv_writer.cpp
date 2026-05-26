@@ -43,6 +43,8 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "warmup_kernels,"
           << "mpi_world_size,"
           << "mpi_rank,"
+          << "threads_per_process,"
+          << "kernels_per_thread,"
           << "host_thread_id,"
           << "kernel_index_in_thread,"
           << "thread_local_kernel_index,"
@@ -51,15 +53,24 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "arrival_wait_ms,"
           << "requested_busy_wait_us,"
           << "kernel_type,"
+          << "gpu_name,"
+          << "cuda_runtime_version,"
+          << "cuda_driver_version,"
+          << "sm_count,"
+          << "device_clock_rate_khz,"
           << "blocks_x,"
           << "threads_per_block,"
           << "grid_z,"
           << "total_blocks,"
           << "total_cuda_threads,"
+          << "total_warps,"
+          << "warps_per_block,"
+          << "estimated_waves,"
           << "active_kernels_estimate,"
           << "submitted_before_global,"
           << "completed_before_global,"
           << "inflight_kernels_estimate,"
+          << "concurrent_kernels_estimate,"
           << "time_since_experiment_start_us,"
           << "rank_local_submitted_count,"
           << "rank_local_completed_count,"
@@ -70,6 +81,8 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "response_time_us,"
           << "launch_overhead_us,"
           << "cuda_event_elapsed_time_us,"
+          << "queueing_delay_us,"
+          << "slowdown,"
           << "cuda_error_code,"
           << "cuda_error_string\n";
 }
@@ -82,6 +95,8 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.warmup_kernels << ','
           << record.mpi_world_size << ','
           << record.mpi_rank << ','
+          << record.threads_per_process << ','
+          << record.kernels_per_thread << ','
           << record.host_thread_id << ','
           << record.kernel_index_in_thread << ','
           << record.thread_local_kernel_index << ','
@@ -90,15 +105,24 @@ void CsvWriter::write(const KernelRecord &record) {
           << std::fixed << std::setprecision(6) << record.arrival_wait_ms << ','
           << record.requested_busy_wait_us << ','
           << csv_escape(record.kernel_type) << ','
+          << csv_escape(record.gpu_name) << ','
+          << record.cuda_runtime_version << ','
+          << record.cuda_driver_version << ','
+          << record.sm_count << ','
+          << record.device_clock_rate_khz << ','
           << record.blocks_x << ','
           << record.threads_per_block << ','
           << record.grid_z << ','
           << record.total_blocks << ','
           << record.total_cuda_threads << ','
+          << record.total_warps << ','
+          << record.warps_per_block << ','
+          << std::fixed << std::setprecision(6) << record.estimated_waves << ','
           << record.active_kernels_estimate << ','
           << record.submitted_before_global << ','
           << record.completed_before_global << ','
           << record.inflight_kernels_estimate << ','
+          << record.concurrent_kernels_estimate << ','
           << std::fixed << std::setprecision(3) << record.time_since_experiment_start_us << ','
           << record.rank_local_submitted_count << ','
           << record.rank_local_completed_count << ','
@@ -109,6 +133,8 @@ void CsvWriter::write(const KernelRecord &record) {
           << std::fixed << std::setprecision(3) << record.response_time_us << ','
           << std::fixed << std::setprecision(3) << record.launch_overhead_us << ','
           << std::fixed << std::setprecision(3) << record.cuda_event_elapsed_time_us << ','
+          << std::fixed << std::setprecision(3) << record.queueing_delay_us << ','
+          << std::fixed << std::setprecision(6) << record.slowdown << ','
           << record.cuda_error_code << ','
           << csv_escape(record.cuda_error_string) << '\n';
 
