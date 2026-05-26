@@ -115,7 +115,8 @@ for ranks in "${MPI_RANKS[@]}"; do
                   --output-dir "${OUTPUT_DIR}" \
                   --device "${DEFAULT_DEVICE}" \
                   --sync-mode "${SYNC_MODE}" \
-                  --kernel-type "${kernel_type}"
+                  --kernel-type "${kernel_type}" \
+                  < /dev/null
               done
             done
           done

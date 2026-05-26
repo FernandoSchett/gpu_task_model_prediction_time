@@ -53,7 +53,8 @@ while IFS=$'\t' read -r \
     --grid-z "${grid_z}" \
     --seed "${seed}" \
     --experiment-name "${experiment_name}" \
-    --kernel-type "${kernel_type}"
+    --kernel-type "${kernel_type}" \
+    < /dev/null
 done < <(
   python3 - "${SLOWDOWN_EXPERIMENT_CONFIG_PATH}" <<'PY'
 import json

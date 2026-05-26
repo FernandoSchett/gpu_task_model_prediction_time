@@ -14,6 +14,29 @@ __device__ __forceinline__ unsigned long long linear_thread_id() {
            static_cast<unsigned long long>(threadIdx.x);
 }
 
+__device__ __forceinline__ unsigned long long grid_thread_count() {
+    return static_cast<unsigned long long>(gridDim.x) *
+           static_cast<unsigned long long>(gridDim.z) *
+           static_cast<unsigned long long>(blockDim.x);
+}
+
+__device__ __forceinline__ unsigned long long initial_memory_index(unsigned long long tid,
+                                                                   unsigned long long memory_mask) {
+    return (tid * 1315423911ULL) & memory_mask;
+}
+
+__device__ __forceinline__ unsigned long long memory_access_stride(unsigned long long total_threads,
+                                                                   unsigned long long memory_mask) {
+    return (total_threads * 17ULL + 1ULL) & memory_mask;
+}
+
+__device__ __forceinline__ unsigned long long next_memory_index(unsigned long long index,
+                                                                unsigned long long stride,
+                                                                unsigned long long elapsed,
+                                                                unsigned long long memory_mask) {
+    return (index + stride + (elapsed & 1023ULL)) & memory_mask;
+}
+
 __device__ __forceinline__ void publish_thread_value(unsigned long long value,
                                                      unsigned long long *sink) {
     if (threadIdx.x == 0) {
@@ -60,17 +83,14 @@ __global__ void memory_kernel(unsigned long long target_cycles,
     const unsigned long long start = clock64();
     unsigned long long elapsed = 0;
     const unsigned long long tid = linear_thread_id();
-    const unsigned long long total_threads =
-        static_cast<unsigned long long>(gridDim.x) *
-        static_cast<unsigned long long>(gridDim.z) *
-        static_cast<unsigned long long>(blockDim.x);
-    unsigned long long index = (tid * 1315423911ULL) & memory_mask;
-    const unsigned long long stride = (total_threads * 17ULL + 1ULL) & memory_mask;
+    const unsigned long long total_threads = grid_thread_count();
+    unsigned long long index = initial_memory_index(tid, memory_mask);
+    const unsigned long long stride = memory_access_stride(total_threads, memory_mask);
     float acc = static_cast<float>((tid & 1023ULL) + 1ULL);
     volatile float *volatile_memory = memory_buffer;
 
     while (elapsed < target_cycles) {
-        index = (index + stride + (elapsed & 1023ULL)) & memory_mask;
+        index = next_memory_index(index, stride, elapsed, memory_mask);
         const float loaded = volatile_memory[index];
         const float updated = loaded + acc * 0.000001f + 1.0f;
         volatile_memory[index] = updated;
@@ -88,7 +108,9 @@ __global__ void mixed_kernel(unsigned long long target_cycles,
     const unsigned long long start = clock64();
     unsigned long long elapsed = 0;
     const unsigned long long tid = linear_thread_id();
-    unsigned long long index = (tid * 2654435761ULL) & memory_mask;
+    const unsigned long long total_threads = grid_thread_count();
+    unsigned long long index = initial_memory_index(tid, memory_mask);
+    const unsigned long long stride = memory_access_stride(total_threads, memory_mask);
     float x = static_cast<float>((tid & 511ULL) + 1ULL) * 0.003f;
     float y = static_cast<float>(((tid >> 9) & 511ULL) + 1ULL) * 0.004f;
     volatile float *volatile_memory = memory_buffer;
@@ -99,7 +121,7 @@ __global__ void mixed_kernel(unsigned long long target_cycles,
             x = fmaf(x, 1.000003f, y + 0.000003f);
             y = fmaf(y, 0.999997f, x + 0.000004f);
         }
-        index = (index + 4099ULL + (elapsed & 255ULL)) & memory_mask;
+        index = next_memory_index(index, stride, elapsed, memory_mask);
         const float loaded = volatile_memory[index];
         const float updated = loaded + x * 0.000001f + y * 0.000002f;
         volatile_memory[index] = updated;

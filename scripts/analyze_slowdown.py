@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
+import csv
+from collections import defaultdict
 from pathlib import Path
-
-import pandas as pd
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -15,76 +15,105 @@ REQUIRED_COLUMNS = {
 }
 
 
-def percentile(series: pd.Series, q: float) -> float:
-    return float(series.quantile(q))
+def to_float(row, key):
+    try:
+        return float(row.get(key, ""))
+    except ValueError:
+        return None
 
 
-def load_result_csvs() -> pd.DataFrame:
-    frames = []
+def percentile(values, q):
+    if not values:
+        return 0.0
+
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * q
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def mean(values):
+    return sum(values) / len(values) if values else 0.0
+
+
+def median(values):
+    return percentile(values, 0.5)
+
+
+def load_result_rows():
+    rows = []
 
     if not RESULTS_DIR.exists():
         print("Pasta resultados/ nao encontrada.")
-        return pd.DataFrame()
+        return rows
 
     for csv_path in sorted(RESULTS_DIR.glob("*.csv")):
         try:
-            df = pd.read_csv(csv_path)
+            with csv_path.open("r", encoding="utf-8", newline="") as file:
+                reader = csv.DictReader(file)
+                if reader.fieldnames is None:
+                    continue
+                if REQUIRED_COLUMNS.difference(reader.fieldnames):
+                    continue
+                for row in reader:
+                    row["source_file"] = csv_path.name
+                    rows.append(row)
         except Exception as exc:
             print(f"Ignorando {csv_path}: erro ao ler CSV: {exc}")
+
+    return rows
+
+
+def prepare_data(rows):
+    prepared = []
+    for row in rows:
+        cuda_error_code = to_float(row, "cuda_error_code")
+        response_time_us = to_float(row, "response_time_us")
+        requested_busy_wait_us = to_float(row, "requested_busy_wait_us")
+        if cuda_error_code != 0 or response_time_us is None or requested_busy_wait_us is None:
+            continue
+        if requested_busy_wait_us <= 0:
             continue
 
-        missing = REQUIRED_COLUMNS.difference(df.columns)
-        if missing:
-            continue
+        row = dict(row)
+        row["response_time_us_value"] = response_time_us
+        row["requested_busy_wait_us_value"] = requested_busy_wait_us
+        row["slowdown_value"] = response_time_us / requested_busy_wait_us
+        row["queueing_delay_us_value"] = response_time_us - requested_busy_wait_us
+        prepared.append(row)
 
-        df["source_file"] = csv_path.name
-        frames.append(df)
-
-    if not frames:
-        return pd.DataFrame()
-
-    return pd.concat(frames, ignore_index=True)
+    return prepared
 
 
-def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["cuda_error_code"] = pd.to_numeric(df["cuda_error_code"], errors="coerce")
-    df["response_time_us"] = pd.to_numeric(df["response_time_us"], errors="coerce")
-    df["requested_busy_wait_us"] = pd.to_numeric(df["requested_busy_wait_us"], errors="coerce")
-
-    df = df[df["cuda_error_code"] == 0]
-    df = df.dropna(subset=["response_time_us", "requested_busy_wait_us"])
-    df = df[df["requested_busy_wait_us"] > 0]
-
-    df["slowdown"] = df["response_time_us"] / df["requested_busy_wait_us"]
-    df["queueing_delay_us"] = df["response_time_us"] - df["requested_busy_wait_us"]
-    return df
-
-
-def summary_row(df: pd.DataFrame) -> dict:
+def summary_row(rows):
+    slowdowns = [row["slowdown_value"] for row in rows]
+    response_times = [row["response_time_us_value"] for row in rows]
+    queueing_delays = [row["queueing_delay_us_value"] for row in rows]
     return {
-        "total_kernels": int(len(df)),
-        "mean_slowdown": df["slowdown"].mean(),
-        "median_slowdown": df["slowdown"].median(),
-        "p95_slowdown": percentile(df["slowdown"], 0.95),
-        "p99_slowdown": percentile(df["slowdown"], 0.99),
-        "max_slowdown": df["slowdown"].max(),
-        "mean_response_time_us": df["response_time_us"].mean(),
-        "p95_response_time_us": percentile(df["response_time_us"], 0.95),
-        "p99_response_time_us": percentile(df["response_time_us"], 0.99),
-        "mean_queueing_delay_us": df["queueing_delay_us"].mean(),
-        "p95_queueing_delay_us": percentile(df["queueing_delay_us"], 0.95),
-        "p99_queueing_delay_us": percentile(df["queueing_delay_us"], 0.99),
+        "total_kernels": len(rows),
+        "mean_slowdown": mean(slowdowns),
+        "median_slowdown": median(slowdowns),
+        "p95_slowdown": percentile(slowdowns, 0.95),
+        "p99_slowdown": percentile(slowdowns, 0.99),
+        "max_slowdown": max(slowdowns) if slowdowns else 0.0,
+        "mean_response_time_us": mean(response_times),
+        "p95_response_time_us": percentile(response_times, 0.95),
+        "p99_response_time_us": percentile(response_times, 0.99),
+        "mean_queueing_delay_us": mean(queueing_delays),
+        "p95_queueing_delay_us": percentile(queueing_delays, 0.95),
+        "p99_queueing_delay_us": percentile(queueing_delays, 0.99),
     }
 
 
-def print_summary(title: str, df: pd.DataFrame) -> None:
+def print_summary(title, rows):
     print(f"\n=== {title} ===")
-    if df.empty:
+    if not rows:
         print("Sem dados validos.")
         return
 
-    summary = summary_row(df)
+    summary = summary_row(rows)
     for key, value in summary.items():
         if key == "total_kernels":
             print(f"{key}: {value}")
@@ -92,42 +121,59 @@ def print_summary(title: str, df: pd.DataFrame) -> None:
             print(f"{key}: {value:.6f}")
 
 
-def print_grouped_summary(df: pd.DataFrame) -> None:
+def print_grouped_summary(rows):
     print("\n=== Resumo por experiment_name ===")
-    if df.empty:
+    if not rows:
         print("Sem dados validos.")
         return
 
-    grouped = []
-    for experiment_name, group in df.groupby("experiment_name", sort=True):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["experiment_name"]].append(row)
+
+    columns = [
+        "experiment_name",
+        "total_kernels",
+        "mean_slowdown",
+        "median_slowdown",
+        "p95_slowdown",
+        "p99_slowdown",
+        "max_slowdown",
+        "mean_response_time_us",
+        "p95_response_time_us",
+        "p99_response_time_us",
+        "mean_queueing_delay_us",
+        "p95_queueing_delay_us",
+        "p99_queueing_delay_us",
+    ]
+    print(" ".join(f"{column:>24}" for column in columns))
+    for experiment_name in sorted(grouped):
         row = {"experiment_name": experiment_name}
-        row.update(summary_row(group))
-        grouped.append(row)
-
-    summary_df = pd.DataFrame(grouped)
-    with pd.option_context(
-        "display.max_rows",
-        None,
-        "display.max_columns",
-        None,
-        "display.width",
-        240,
-    ):
-        print(summary_df.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
+        row.update(summary_row(grouped[experiment_name]))
+        values = []
+        for column in columns:
+            value = row[column]
+            if isinstance(value, int):
+                values.append(f"{value:>24}")
+            elif isinstance(value, float):
+                values.append(f"{value:>24.6f}")
+            else:
+                values.append(f"{value:>24}")
+        print(" ".join(values))
 
 
-def compare_baseline_stress(df: pd.DataFrame) -> None:
-    experiment_names = set(df["experiment_name"].astype(str).unique())
-    if "baseline" not in experiment_names or "stress" not in experiment_names:
+def compare_baseline_stress(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["experiment_name"]].append(row)
+
+    baseline = grouped.get("baseline", [])
+    stress = grouped.get("stress", [])
+    if not baseline or not stress:
         return
 
-    baseline = df[df["experiment_name"] == "baseline"]
-    stress = df[df["experiment_name"] == "stress"]
-    if baseline.empty or stress.empty:
-        return
-
-    baseline_p95 = percentile(baseline["slowdown"], 0.95)
-    stress_p95 = percentile(stress["slowdown"], 0.95)
+    baseline_p95 = percentile([row["slowdown_value"] for row in baseline], 0.95)
+    stress_p95 = percentile([row["slowdown_value"] for row in stress], 0.95)
     ratio = stress_p95 / baseline_p95 if baseline_p95 != 0 else float("inf")
 
     print("\n=== Comparacao baseline vs stress ===")
@@ -143,20 +189,20 @@ def compare_baseline_stress(df: pd.DataFrame) -> None:
         print("Ha sinal forte de slowdown/concorrencia.")
 
 
-def main() -> int:
-    df = load_result_csvs()
-    if df.empty:
+def main():
+    rows = load_result_rows()
+    if not rows:
         print("Nenhum CSV de resultados valido encontrado em resultados/.")
         return 1
 
-    df = prepare_data(df)
-    if df.empty:
+    rows = prepare_data(rows)
+    if not rows:
         print("Nenhuma linha valida apos filtrar cuda_error_code == 0.")
         return 1
 
-    print_summary("Resumo geral", df)
-    print_grouped_summary(df)
-    compare_baseline_stress(df)
+    print_summary("Resumo geral", rows)
+    print_grouped_summary(rows)
+    compare_baseline_stress(rows)
     return 0
 
 
