@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Train an interpretable linear-regression baseline for CUDA timing CSVs.
+"""Train regression baselines for CUDA timing CSVs.
 
-This is intentionally a baseline, not a claim that CUDA timings are linear.
+Linear regression is intentionally treated as a baseline, not a claim that CUDA timings are linear.
 Occupancy, SM waves, warp scheduling, launch overhead, cache/memory effects,
 cross-process interference, and internal GPU scheduling can all introduce
-non-linear behavior. The goal here is to get a reproducible first model whose
-coefficients are easy to inspect before trying richer regressors.
+non-linear behavior. The extra models here are lightweight baselines that avoid
+an external scikit-learn dependency.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_RESULTS_DIR = REPO_ROOT / "resultados"
 TARGETS = ("response_time_us", "queueing_delay_us", "slowdown")
+MODELS = ("linear", "ridge", "quadratic_ridge", "knn")
+KERNEL_TYPES = ("busy_wait", "compute", "memory", "mixed")
 DEFAULT_FEATURES = (
     "requested_busy_wait_us",
     "mpi_world_size",
@@ -58,6 +60,24 @@ def parse_args() -> argparse.Namespace:
         help="Prediction target.",
     )
     parser.add_argument(
+        "--model",
+        choices=MODELS,
+        default="linear",
+        help="Regression model to train.",
+    )
+    parser.add_argument(
+        "--ridge-alpha",
+        type=float,
+        default=1.0,
+        help="L2 regularization strength for ridge-based models.",
+    )
+    parser.add_argument(
+        "--knn-k",
+        type=int,
+        default=15,
+        help="Number of neighbors for knn regression.",
+    )
+    parser.add_argument(
         "--test-fraction",
         type=float,
         default=0.25,
@@ -78,7 +98,7 @@ def to_float(row: dict[str, str], name: str, default: float = math.nan) -> float
 
 def load_rows(results_dir: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for csv_path in sorted(results_dir.glob("*.csv")):
+    for csv_path in sorted(results_dir.glob("resultados_experimentos_*.csv")):
         with csv_path.open("r", encoding="utf-8", newline="") as file:
             reader = csv.DictReader(file)
             if reader.fieldnames is None or "response_time_us" not in reader.fieldnames:
@@ -129,13 +149,16 @@ def add_derived_features(row: dict[str, str]) -> dict[str, float]:
             "slowdown": slowdown,
         }
     )
+    kernel_type = row.get("kernel_type", "")
+    for name in KERNEL_TYPES:
+        values[f"kernel_type_{name}"] = 1.0 if kernel_type == name else 0.0
     return values
 
 
 def build_matrix(rows: Iterable[dict[str, str]], target: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
     x_rows: list[list[float]] = []
     y_values: list[float] = []
-    features = list(DEFAULT_FEATURES)
+    features = list(DEFAULT_FEATURES) + [f"kernel_type_{name}" for name in KERNEL_TYPES]
 
     for row in rows:
         if to_float(row, "cuda_error_code", 0.0) != 0.0:
@@ -189,9 +212,31 @@ def fit_linear_regression(train_x: np.ndarray, train_y: np.ndarray) -> np.ndarra
     return coef
 
 
+def fit_ridge_regression(train_x: np.ndarray, train_y: np.ndarray, alpha: float) -> np.ndarray:
+    design = np.column_stack([np.ones(train_x.shape[0]), train_x])
+    penalty = np.eye(design.shape[1]) * alpha
+    penalty[0, 0] = 0.0
+    return np.linalg.solve(design.T @ design + penalty, design.T @ train_y)
+
+
+def quadratic_features(x: np.ndarray) -> np.ndarray:
+    squared = x * x
+    return np.column_stack([x, squared])
+
+
 def predict(x: np.ndarray, coef: np.ndarray) -> np.ndarray:
     design = np.column_stack([np.ones(x.shape[0]), x])
     return design @ coef
+
+
+def predict_knn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, k: int) -> np.ndarray:
+    k = max(1, min(k, train_x.shape[0]))
+    predictions = []
+    for row in test_x:
+        distances = np.sum((train_x - row) ** 2, axis=1)
+        nearest = np.argpartition(distances, k - 1)[:k]
+        predictions.append(float(np.mean(train_y[nearest])))
+    return np.asarray(predictions, dtype=float)
 
 
 def print_metrics(name: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
@@ -216,17 +261,47 @@ def main() -> int:
     x, y, features = build_matrix(rows, args.target)
     train_x, test_x, train_y, test_y = train_test_split(x, y, args.test_fraction)
     train_x_std, test_x_std, _, _ = standardize_train_test(train_x, test_x)
-    coef = fit_linear_regression(train_x_std, train_y)
 
     print(f"target: {args.target}")
-    print_metrics("train", train_y, predict(train_x_std, coef))
-    print_metrics("test", test_y, predict(test_x_std, coef))
+    print(f"model: {args.model}")
 
-    print("\nstandardized_coefficients:")
-    ranked = sorted(zip(features, coef[1:]), key=lambda item: abs(item[1]), reverse=True)
-    for feature, value in ranked:
-        print(f"{feature}: {value:.6f}")
-    print(f"intercept: {coef[0]:.6f}")
+    if args.model == "linear":
+        coef = fit_linear_regression(train_x_std, train_y)
+        print_metrics("train", train_y, predict(train_x_std, coef))
+        print_metrics("test", test_y, predict(test_x_std, coef))
+
+        print("\nstandardized_coefficients:")
+        ranked = sorted(zip(features, coef[1:]), key=lambda item: abs(item[1]), reverse=True)
+        for feature, value in ranked:
+            print(f"{feature}: {value:.6f}")
+        print(f"intercept: {coef[0]:.6f}")
+    elif args.model == "ridge":
+        coef = fit_ridge_regression(train_x_std, train_y, args.ridge_alpha)
+        print_metrics("train", train_y, predict(train_x_std, coef))
+        print_metrics("test", test_y, predict(test_x_std, coef))
+
+        print("\nstandardized_coefficients:")
+        ranked = sorted(zip(features, coef[1:]), key=lambda item: abs(item[1]), reverse=True)
+        for feature, value in ranked:
+            print(f"{feature}: {value:.6f}")
+        print(f"intercept: {coef[0]:.6f}")
+    elif args.model == "quadratic_ridge":
+        train_quad = quadratic_features(train_x_std)
+        test_quad = quadratic_features(test_x_std)
+        quad_features = features + [f"{feature}^2" for feature in features]
+        coef = fit_ridge_regression(train_quad, train_y, args.ridge_alpha)
+        print_metrics("train", train_y, predict(train_quad, coef))
+        print_metrics("test", test_y, predict(test_quad, coef))
+
+        print("\nstandardized_coefficients:")
+        ranked = sorted(zip(quad_features, coef[1:]), key=lambda item: abs(item[1]), reverse=True)
+        for feature, value in ranked[:30]:
+            print(f"{feature}: {value:.6f}")
+        print(f"intercept: {coef[0]:.6f}")
+    elif args.model == "knn":
+        print_metrics("train", train_y, predict_knn(train_x_std, train_y, train_x_std, args.knn_k))
+        print_metrics("test", test_y, predict_knn(train_x_std, train_y, test_x_std, args.knn_k))
+
     return 0
 
 
