@@ -4,27 +4,25 @@ NVCC := nvcc
 TARGET := main
 BUILD_DIR := build
 SRC_DIR := src
+LIBS_DIR := libs
 INCLUDE_DIRS := \
-	$(SRC_DIR)/config \
-	$(SRC_DIR)/cuda \
-	$(SRC_DIR)/experiment \
-	$(SRC_DIR)/io \
-	$(SRC_DIR)/telemetry \
-	$(SRC_DIR)/timing
+	$(SRC_DIR)/include \
+	$(LIBS_DIR)/include
 
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC ?= $(CUDA_HOME)/include
 CUDA_LIBDIR ?= $(CUDA_HOME)/lib64
 
 CPP_SRCS := main.cpp \
-	src/experiment/experiment.cpp \
-	src/io/csv_writer.cpp \
-	src/config/config.cpp \
-	src/config/env_loader.cpp \
-	src/telemetry/gpu_telemetry.cpp \
-	src/timing/timer.cpp
+	src/implementation/benchmark_app.cpp \
+	libs/src/experiment.cpp \
+	libs/src/csv_writer.cpp \
+	libs/src/config.cpp \
+	libs/src/env_loader.cpp \
+	libs/src/gpu_telemetry.cpp \
+	libs/src/timer.cpp
 
-CU_SRCS := src/cuda/cuda_kernels.cu
+CU_SRCS := libs/src/cuda_kernels.cu
 
 CPP_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(CPP_SRCS))
 CU_OBJS := $(patsubst %.cu,$(BUILD_DIR)/%.o,$(CU_SRCS))
