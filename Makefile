@@ -60,6 +60,7 @@ run: $(TARGET)
 		--warmup-kernels 20 \
 		--flush-every 1000 \
 		--gpu-telemetry on \
+		--gpu-telemetry-during off \
 		--telemetry-interval-ms 1000 \
 		--arrival-min-ms 1 \
 		--arrival-max-ms 5 \

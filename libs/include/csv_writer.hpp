@@ -40,11 +40,16 @@ struct KernelRecord {
     std::uint64_t completed_before_global = 0;
     std::uint64_t inflight_kernels_estimate = 0;
     std::uint64_t concurrent_kernels_estimate = 0;
+    int logical_stream_id = 0;
+    std::int64_t measurement_start_time_ns = 0;
     double time_since_experiment_start_us = 0.0;
     std::uint64_t rank_local_submitted_count = 0;
     std::uint64_t rank_local_completed_count = 0;
     std::int64_t submit_time_ns = 0;
+    std::int64_t launch_return_time_ns = 0;
     std::int64_t completion_time_ns = 0;
+    std::int64_t device_start_time_ns_approx = 0;
+    std::int64_t device_end_time_ns_approx = 0;
     std::int64_t host_submit_time_ns = 0;
     std::int64_t host_completion_time_ns = 0;
     double response_time_us = 0.0;

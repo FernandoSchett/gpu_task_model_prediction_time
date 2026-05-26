@@ -71,11 +71,16 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "completed_before_global,"
           << "inflight_kernels_estimate,"
           << "concurrent_kernels_estimate,"
+          << "logical_stream_id,"
+          << "measurement_start_time_ns,"
           << "time_since_experiment_start_us,"
           << "rank_local_submitted_count,"
           << "rank_local_completed_count,"
           << "submit_time_ns,"
+          << "launch_return_time_ns,"
           << "completion_time_ns,"
+          << "device_start_time_ns_approx,"
+          << "device_end_time_ns_approx,"
           << "host_submit_time_ns,"
           << "host_completion_time_ns,"
           << "response_time_us,"
@@ -123,11 +128,16 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.completed_before_global << ','
           << record.inflight_kernels_estimate << ','
           << record.concurrent_kernels_estimate << ','
+          << record.logical_stream_id << ','
+          << record.measurement_start_time_ns << ','
           << std::fixed << std::setprecision(3) << record.time_since_experiment_start_us << ','
           << record.rank_local_submitted_count << ','
           << record.rank_local_completed_count << ','
           << record.submit_time_ns << ','
+          << record.launch_return_time_ns << ','
           << record.completion_time_ns << ','
+          << record.device_start_time_ns_approx << ','
+          << record.device_end_time_ns_approx << ','
           << record.host_submit_time_ns << ','
           << record.host_completion_time_ns << ','
           << std::fixed << std::setprecision(3) << record.response_time_us << ','

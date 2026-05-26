@@ -18,6 +18,7 @@ SYNC_MODE="${SYNC_MODE:-blocking}"
 WARMUP_KERNELS="${WARMUP_KERNELS:-20}"
 FLUSH_EVERY="${FLUSH_EVERY:-1000}"
 GPU_TELEMETRY="${GPU_TELEMETRY:-on}"
+GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-off}"
 TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-1000}"
 EXPERIMENT_CONFIG="${EXPERIMENT_CONFIG:-sweep_padrao}"
 EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/${EXPERIMENT_CONFIG}.json}"
@@ -102,6 +103,7 @@ for ranks in "${MPI_RANKS[@]}"; do
                   --warmup-kernels "${WARMUP_KERNELS}" \
                   --flush-every "${FLUSH_EVERY}" \
                   --gpu-telemetry "${GPU_TELEMETRY}" \
+                  --gpu-telemetry-during "${GPU_TELEMETRY_DURING}" \
                   --telemetry-interval-ms "${TELEMETRY_INTERVAL_MS}" \
                   --arrival-min-ms "${arrival_min_ms}" \
                   --arrival-max-ms "${arrival_max_ms}" \

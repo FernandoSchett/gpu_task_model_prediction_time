@@ -14,6 +14,9 @@ fi
 
 SLOWDOWN_EXPERIMENT_CONFIG="${SLOWDOWN_EXPERIMENT_CONFIG:-slowdown_test}"
 SLOWDOWN_EXPERIMENT_CONFIG_PATH="${SLOWDOWN_EXPERIMENT_CONFIG_PATH:-experimentos/${SLOWDOWN_EXPERIMENT_CONFIG}.json}"
+GPU_TELEMETRY="${GPU_TELEMETRY:-on}"
+GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-off}"
+TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-1000}"
 
 if [[ ! -f "${SLOWDOWN_EXPERIMENT_CONFIG_PATH}" ]]; then
   echo "Arquivo de configuracao de slowdown nao encontrado: ${SLOWDOWN_EXPERIMENT_CONFIG_PATH}" >&2
@@ -53,6 +56,9 @@ while IFS=$'\t' read -r \
     --grid-z "${grid_z}" \
     --seed "${seed}" \
     --experiment-name "${experiment_name}" \
+    --gpu-telemetry "${GPU_TELEMETRY}" \
+    --gpu-telemetry-during "${GPU_TELEMETRY_DURING}" \
+    --telemetry-interval-ms "${TELEMETRY_INTERVAL_MS}" \
     --kernel-type "${kernel_type}" \
     < /dev/null
 done < <(

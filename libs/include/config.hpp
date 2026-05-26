@@ -24,6 +24,7 @@ struct ExperimentConfig {
     int warmup_kernels = 20;
     int flush_every = 1000;
     bool gpu_telemetry_enabled = true;
+    bool gpu_telemetry_during = false;
     int telemetry_interval_ms = 1000;
     double arrival_min_ms = 1.0;
     double arrival_max_ms = 1.0;

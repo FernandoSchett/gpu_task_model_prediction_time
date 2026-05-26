@@ -375,6 +375,16 @@ void run_host_thread(const ExperimentConfig &config,
                         : 0.0;
                 const double response_time_us =
                     static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
+                const std::int64_t cuda_event_elapsed_time_ns =
+                    cuda_event_elapsed_ms >= 0.0f
+                        ? static_cast<std::int64_t>(static_cast<double>(cuda_event_elapsed_ms) * 1000000.0)
+                        : -1;
+                const std::int64_t device_end_time_ns_approx =
+                    cuda_event_elapsed_time_ns >= 0 ? completion_time_ns : 0;
+                const std::int64_t device_start_time_ns_approx =
+                    cuda_event_elapsed_time_ns >= 0
+                        ? device_end_time_ns_approx - cuda_event_elapsed_time_ns
+                        : 0;
 
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
@@ -417,12 +427,17 @@ void run_host_thread(const ExperimentConfig &config,
                         : 0;
                 record.concurrent_kernels_estimate =
                     active_before_global + static_cast<std::uint64_t>(mpi_world_size > 0 ? mpi_world_size : 1);
+                record.logical_stream_id = host_thread_id;
+                record.measurement_start_time_ns = measurement_start_ns;
                 record.time_since_experiment_start_us =
                     static_cast<double>(submit_time_ns - measurement_start_ns) / 1000.0;
                 record.rank_local_submitted_count = submitted_before_rank;
                 record.rank_local_completed_count = completed_before_rank;
                 record.submit_time_ns = submit_time_ns;
+                record.launch_return_time_ns = launch_return_time_ns;
                 record.completion_time_ns = completion_time_ns;
+                record.device_start_time_ns_approx = device_start_time_ns_approx;
+                record.device_end_time_ns_approx = device_end_time_ns_approx;
                 record.host_submit_time_ns = submit_time_ns;
                 record.host_completion_time_ns = completion_time_ns;
                 record.response_time_us = response_time_us;
@@ -542,6 +557,7 @@ void run_experiment(const ExperimentConfig &config,
                   << ", warmup-kernels=" << config.warmup_kernels
                   << ", flush-every=" << config.flush_every
                   << ", gpu-telemetry=" << (config.gpu_telemetry_enabled ? "on" : "off")
+                  << ", gpu-telemetry-during=" << (config.gpu_telemetry_during ? "on" : "off")
                   << ", output-dir=" << config.output_dir << '\n';
     }
     std::cerr << "[rank " << mpi_rank << "] writing " << csv_path.string() << '\n';
@@ -558,7 +574,9 @@ void run_experiment(const ExperimentConfig &config,
     MeasurementStartBarrier measurement_start_barrier(config.threads_per_process);
 
     gpu_telemetry.sample_once("before");
-    gpu_telemetry.start();
+    if (config.gpu_telemetry_during) {
+        gpu_telemetry.start();
+    }
 
     for (int host_thread_id = 0; host_thread_id < config.threads_per_process; ++host_thread_id) {
         workers.emplace_back(run_host_thread,
@@ -578,7 +596,9 @@ void run_experiment(const ExperimentConfig &config,
         worker.join();
     }
 
-    gpu_telemetry.stop();
+    if (config.gpu_telemetry_during) {
+        gpu_telemetry.stop();
+    }
     gpu_telemetry.sample_once("after");
 
     writer.flush();
