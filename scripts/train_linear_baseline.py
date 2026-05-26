@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -43,6 +44,7 @@ DEFAULT_FEATURES = (
     "workers_x_total_warps",
     "workers_x_blocks_per_sm",
     "requested_busy_wait_us_per_arrival_ms",
+    "target_gpu_demand_percent",
     "arrival_wait_ms",
     "launch_overhead_us",
 )
@@ -112,6 +114,13 @@ def load_rows(results_dir: Path) -> list[dict[str, str]]:
     return rows
 
 
+def target_gpu_demand_percent(row: dict[str, str]) -> float:
+    match = re.search(r"_gputarget([0-9]+(?:p[0-9]+)?)_", row.get("experiment_name", ""))
+    if not match:
+        return 0.0
+    return float(match.group(1).replace("p", "."))
+
+
 def add_derived_features(row: dict[str, str]) -> dict[str, float]:
     blocks_x = to_float(row, "blocks_x", 0.0)
     grid_z = to_float(row, "grid_z", 1.0)
@@ -158,6 +167,7 @@ def add_derived_features(row: dict[str, str]) -> dict[str, float]:
                 "requested_busy_wait_us_per_arrival_ms",
                 requested_us / arrival_wait_ms if arrival_wait_ms > 0 else 0.0,
             ),
+            "target_gpu_demand_percent": target_gpu_demand_percent(row),
             "queueing_delay_us": queueing_delay_us,
             "slowdown": slowdown,
         }

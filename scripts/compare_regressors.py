@@ -49,6 +49,7 @@ BASE_FEATURES = (
     "workers_x_blocks_per_sm",
     "workers_x_total_warps",
     "requested_busy_wait_us_per_arrival_ms",
+    "target_gpu_demand_percent",
 )
 
 
@@ -272,6 +273,10 @@ def row_features(row: dict[str, str]) -> dict[str, float]:
     effective_workers = mpi_world_size * threads_per_process
     blocks_per_sm = to_float(row, "blocks_per_sm", total_blocks / sm_count if sm_count > 0 else 0.0)
     arrival_wait_ms = to_float(row, "arrival_wait_ms", 0.0)
+    target_match = re.search(r"_gputarget([0-9]+(?:p[0-9]+)?)_", row.get("experiment_name", ""))
+    target_gpu_demand_percent = (
+        float(target_match.group(1).replace("p", ".")) if target_match is not None else 0.0
+    )
 
     values = {
         "requested_busy_wait_us": requested_us,
@@ -301,6 +306,7 @@ def row_features(row: dict[str, str]) -> dict[str, float]:
             "requested_busy_wait_us_per_arrival_ms",
             requested_us / arrival_wait_ms if arrival_wait_ms > 0 else 0.0,
         ),
+        "target_gpu_demand_percent": target_gpu_demand_percent,
         "queueing_delay_us": to_float(row, "queueing_delay_us", response_us - requested_us),
         "slowdown": to_float(row, "slowdown", response_us / requested_us if requested_us > 0 else math.nan),
     }

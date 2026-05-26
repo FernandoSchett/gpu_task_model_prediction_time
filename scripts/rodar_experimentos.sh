@@ -74,9 +74,7 @@ def kernel_range_value(item):
     raise SystemExit("kernel_ranges deve usar min_us/max_us ou min_s/max_s")
 
 
-bash_array("MPI_RANKS", require("mpi_ranks"))
 bash_array("SEEDS", require("seeds"))
-bash_array("THREADS_PER_PROCESS", require("threads_per_process"))
 bash_scalar("KERNELS_PER_THREAD", require("kernels_per_thread"))
 optional_bash_scalar("WARMUP_KERNELS", config.get("warmup_kernels"))
 optional_bash_scalar("JSON_GPU_TELEMETRY", config.get("gpu_telemetry"))
@@ -85,15 +83,39 @@ optional_bash_scalar("JSON_TELEMETRY_INTERVAL_MS", config.get("telemetry_interva
 bash_array("BLOCKS_X", require("blocks_x"))
 bash_array("THREADS_PER_BLOCK", require("threads_per_block"))
 bash_scalar("GRID_Z", require("grid_z"))
-bash_array(
-    "KERNEL_RANGES",
-    [kernel_range_value(item) for item in require("kernel_ranges")],
-)
-bash_array(
-    "ARRIVAL_RANGES",
-    [range_value(item, "min_ms", "max_ms") for item in require("arrival_ranges")],
-)
 bash_array("KERNEL_TYPES", require("kernel_types"))
+
+profiles = config.get("gpu_load_profiles")
+if profiles:
+    values = []
+    for profile in profiles:
+        values.append(
+            ":".join(
+                str(profile[key])
+                for key in (
+                    "target_gpu_demand_percent",
+                    "mpi_ranks",
+                    "threads_per_process",
+                    "kernel_min_us",
+                    "kernel_max_us",
+                    "arrival_min_ms",
+                    "arrival_max_ms",
+                )
+            )
+        )
+    bash_array("GPU_LOAD_PROFILES", values)
+else:
+    bash_array("GPU_LOAD_PROFILES", [])
+    bash_array("MPI_RANKS", require("mpi_ranks"))
+    bash_array("THREADS_PER_PROCESS", require("threads_per_process"))
+    bash_array(
+        "KERNEL_RANGES",
+        [kernel_range_value(item) for item in require("kernel_ranges")],
+    )
+    bash_array(
+        "ARRIVAL_RANGES",
+        [range_value(item, "min_ms", "max_ms") for item in require("arrival_ranges")],
+    )
 PY
 )"
 
@@ -107,49 +129,74 @@ make
 echo "Usando configuracao de experimento: ${EXPERIMENT_CONFIG_PATH}"
 echo "Telemetria GPU: gpu_telemetry=${GPU_TELEMETRY}, gpu_telemetry_during=${GPU_TELEMETRY_DURING}, telemetry_interval_ms=${TELEMETRY_INTERVAL_MS}"
 
-for ranks in "${MPI_RANKS[@]}"; do
-  for threads in "${THREADS_PER_PROCESS[@]}"; do
-    for blocks_x in "${BLOCKS_X[@]}"; do
-      for threads_per_block in "${THREADS_PER_BLOCK[@]}"; do
-        for kernel_type in "${KERNEL_TYPES[@]}"; do
-          for kernel_range in "${KERNEL_RANGES[@]}"; do
-            IFS=":" read -r kernel_min_us kernel_max_us <<< "${kernel_range}"
-            for arrival_range in "${ARRIVAL_RANGES[@]}"; do
-              IFS=":" read -r arrival_min_ms arrival_max_ms <<< "${arrival_range}"
-              for seed in "${SEEDS[@]}"; do
+run_experiment_config() {
+  local target_gpu_demand_percent="$1"
+  local ranks="$2"
+  local threads="$3"
+  local kernel_min_us="$4"
+  local kernel_max_us="$5"
+  local arrival_min_ms="$6"
+  local arrival_max_ms="$7"
+  local target_tag=""
 
-                experiment_name="s${seed}_r${ranks}_t${threads}_k${KERNELS_PER_THREAD}_w${WARMUP_KERNELS}_kt${kernel_type}_bx${blocks_x}_tpb${threads_per_block}_gz${GRID_Z}_ku${kernel_min_us}-${kernel_max_us}_am${arrival_min_ms}-${arrival_max_ms}"
-                experiment_output_dir="${OUTPUT_DIR}/${experiment_name}"
-                mkdir -p "${experiment_output_dir}"
+  if [[ "${target_gpu_demand_percent}" != "grid" ]]; then
+    target_tag="_gputarget${target_gpu_demand_percent//./p}"
+  fi
 
-                echo "Running ${experiment_name} -> ${experiment_output_dir}"
-                mpirun -np "${ranks}" ./main \
-                  --threads-per-process "${threads}" \
-                  --kernels-per-thread "${KERNELS_PER_THREAD}" \
-                  --warmup-kernels "${WARMUP_KERNELS}" \
-                  --flush-every "${FLUSH_EVERY}" \
-                  --gpu-telemetry "${GPU_TELEMETRY}" \
-                  --gpu-telemetry-during "${GPU_TELEMETRY_DURING}" \
-                  --telemetry-interval-ms "${TELEMETRY_INTERVAL_MS}" \
-                  --arrival-min-ms "${arrival_min_ms}" \
-                  --arrival-max-ms "${arrival_max_ms}" \
-                  --kernel-min-us "${kernel_min_us}" \
-                  --kernel-max-us "${kernel_max_us}" \
-                  --blocks-x "${blocks_x}" \
-                  --threads-per-block "${threads_per_block}" \
-                  --grid-z "${GRID_Z}" \
-                  --seed "${seed}" \
-                  --experiment-name "${experiment_name}" \
-                  --output-dir "${OUTPUT_DIR}" \
-                  --device "${DEFAULT_DEVICE}" \
-                  --sync-mode "${SYNC_MODE}" \
-                  --kernel-type "${kernel_type}" \
-                  < /dev/null
-              done
-            done
-          done
+  for blocks_x in "${BLOCKS_X[@]}"; do
+    for threads_per_block in "${THREADS_PER_BLOCK[@]}"; do
+      for kernel_type in "${KERNEL_TYPES[@]}"; do
+        for seed in "${SEEDS[@]}"; do
+
+          experiment_name="s${seed}${target_tag}_r${ranks}_t${threads}_k${KERNELS_PER_THREAD}_w${WARMUP_KERNELS}_kt${kernel_type}_bx${blocks_x}_tpb${threads_per_block}_gz${GRID_Z}_ku${kernel_min_us}-${kernel_max_us}_am${arrival_min_ms}-${arrival_max_ms}"
+          experiment_output_dir="${OUTPUT_DIR}/${experiment_name}"
+          mkdir -p "${experiment_output_dir}"
+
+          echo "Running ${experiment_name} -> ${experiment_output_dir}"
+          mpirun -np "${ranks}" ./main \
+            --threads-per-process "${threads}" \
+            --kernels-per-thread "${KERNELS_PER_THREAD}" \
+            --warmup-kernels "${WARMUP_KERNELS}" \
+            --flush-every "${FLUSH_EVERY}" \
+            --gpu-telemetry "${GPU_TELEMETRY}" \
+            --gpu-telemetry-during "${GPU_TELEMETRY_DURING}" \
+            --telemetry-interval-ms "${TELEMETRY_INTERVAL_MS}" \
+            --arrival-min-ms "${arrival_min_ms}" \
+            --arrival-max-ms "${arrival_max_ms}" \
+            --kernel-min-us "${kernel_min_us}" \
+            --kernel-max-us "${kernel_max_us}" \
+            --blocks-x "${blocks_x}" \
+            --threads-per-block "${threads_per_block}" \
+            --grid-z "${GRID_Z}" \
+            --seed "${seed}" \
+            --experiment-name "${experiment_name}" \
+            --output-dir "${OUTPUT_DIR}" \
+            --device "${DEFAULT_DEVICE}" \
+            --sync-mode "${SYNC_MODE}" \
+            --kernel-type "${kernel_type}" \
+            < /dev/null
         done
       done
     done
   done
-done
+}
+
+if ((${#GPU_LOAD_PROFILES[@]})); then
+  echo "Perfis de demanda de GPU: ${GPU_LOAD_PROFILES[*]}"
+  for profile in "${GPU_LOAD_PROFILES[@]}"; do
+    IFS=":" read -r target_gpu_demand_percent ranks threads kernel_min_us kernel_max_us arrival_min_ms arrival_max_ms <<< "${profile}"
+    run_experiment_config "${target_gpu_demand_percent}" "${ranks}" "${threads}" "${kernel_min_us}" "${kernel_max_us}" "${arrival_min_ms}" "${arrival_max_ms}"
+  done
+else
+  for ranks in "${MPI_RANKS[@]}"; do
+    for threads in "${THREADS_PER_PROCESS[@]}"; do
+      for kernel_range in "${KERNEL_RANGES[@]}"; do
+        IFS=":" read -r kernel_min_us kernel_max_us <<< "${kernel_range}"
+        for arrival_range in "${ARRIVAL_RANGES[@]}"; do
+          IFS=":" read -r arrival_min_ms arrival_max_ms <<< "${arrival_range}"
+          run_experiment_config "grid" "${ranks}" "${threads}" "${kernel_min_us}" "${kernel_max_us}" "${arrival_min_ms}" "${arrival_max_ms}"
+        done
+      done
+    done
+  done
+fi

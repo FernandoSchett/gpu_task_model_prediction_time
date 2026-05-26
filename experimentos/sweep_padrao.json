@@ -1,36 +1,79 @@
 {
   "name": "sweep_moderado_sem_estimativas",
-  "description": "Sweep principal em escala de microssegundos, recalibrado pelo slowdown_test: evita chegada zero e limita concorrencia a ate 8 workers efetivos para ficar abaixo do stress extremo.",
+  "description": "Sweep principal em escala de microssegundos, recalibrado pelo slowdown_test para cobrir demanda aproximada de GPU em regimes leve, medio, saturado e acima da capacidade.",
   "gpu_telemetry": "off",
   "gpu_telemetry_during": "off",
   "telemetry_interval_ms": 1000,
-  "mpi_ranks": [1, 2],
   "seeds": [67],
-  "threads_per_process": [1, 2, 4],
-  "kernels_per_thread": 1500,
+  "kernels_per_thread": 1200,
   "warmup_kernels": 20,
+  "gpu_load_profiles": [
+    {
+      "target_gpu_demand_percent": 10,
+      "mpi_ranks": 1,
+      "threads_per_process": 1,
+      "kernel_min_us": 100,
+      "kernel_max_us": 500,
+      "arrival_min_ms": 4,
+      "arrival_max_ms": 8
+    },
+    {
+      "target_gpu_demand_percent": 50,
+      "mpi_ranks": 1,
+      "threads_per_process": 4,
+      "kernel_min_us": 500,
+      "kernel_max_us": 1200,
+      "arrival_min_ms": 1,
+      "arrival_max_ms": 3
+    },
+    {
+      "target_gpu_demand_percent": 50,
+      "mpi_ranks": 2,
+      "threads_per_process": 2,
+      "kernel_min_us": 500,
+      "kernel_max_us": 1200,
+      "arrival_min_ms": 1,
+      "arrival_max_ms": 3
+    },
+    {
+      "target_gpu_demand_percent": 50,
+      "mpi_ranks": 4,
+      "threads_per_process": 1,
+      "kernel_min_us": 500,
+      "kernel_max_us": 1200,
+      "arrival_min_ms": 1,
+      "arrival_max_ms": 3
+    },
+    {
+      "target_gpu_demand_percent": 100,
+      "mpi_ranks": 2,
+      "threads_per_process": 8,
+      "kernel_min_us": 500,
+      "kernel_max_us": 1500,
+      "arrival_min_ms": 0.2,
+      "arrival_max_ms": 1
+    },
+    {
+      "target_gpu_demand_percent": 100,
+      "mpi_ranks": 4,
+      "threads_per_process": 4,
+      "kernel_min_us": 500,
+      "kernel_max_us": 1500,
+      "arrival_min_ms": 0.2,
+      "arrival_max_ms": 1
+    },
+    {
+      "target_gpu_demand_percent": 120,
+      "mpi_ranks": 4,
+      "threads_per_process": 8,
+      "kernel_min_us": 500,
+      "kernel_max_us": 2000,
+      "arrival_min_ms": 0,
+      "arrival_max_ms": 0.5
+    }
+  ],
   "blocks_x": [16, 32, 64],
   "threads_per_block": [128, 256],
   "grid_z": 1,
-  "kernel_ranges": [
-    {
-      "min_us": 100,
-      "max_us": 500
-    },
-    {
-      "min_us": 500,
-      "max_us": 1500
-    }
-  ],
-  "arrival_ranges": [
-    {
-      "min_ms": 0.5,
-      "max_ms": 2
-    },
-    {
-      "min_ms": 2,
-      "max_ms": 6
-    }
-  ],
   "kernel_types": ["busy_wait", "compute", "memory", "mixed"]
 }
