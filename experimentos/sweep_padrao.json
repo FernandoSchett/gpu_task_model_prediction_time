@@ -1,22 +1,25 @@
 {
-  "name": "sweep_segundos_sem_estimativas",
-  "description": "Sweep com duracoes em escala de segundos e somente features medidas ou deterministicas da configuracao/hardware.",
+  "name": "sweep_moderado_sem_estimativas",
+  "description": "Sweep principal em escala de microssegundos, recalibrado pelo slowdown_test: evita chegada zero e limita concorrencia a ate 8 workers efetivos para ficar abaixo do stress extremo.",
+  "gpu_telemetry": "off",
+  "gpu_telemetry_during": "off",
+  "telemetry_interval_ms": 1000,
   "mpi_ranks": [1, 2],
   "seeds": [67],
   "threads_per_process": [1, 2, 4],
-  "kernels_per_thread": 3,
-  "warmup_kernels": 5,
+  "kernels_per_thread": 1500,
+  "warmup_kernels": 20,
   "blocks_x": [16, 32, 64],
   "threads_per_block": [128, 256],
   "grid_z": 1,
   "kernel_ranges": [
     {
-      "min_s": 1,
-      "max_s": 2
+      "min_us": 100,
+      "max_us": 500
     },
     {
-      "min_s": 2,
-      "max_s": 3
+      "min_us": 500,
+      "max_us": 1500
     }
   ],
   "arrival_ranges": [
@@ -25,8 +28,8 @@
       "max_ms": 2
     },
     {
-      "min_ms": 1,
-      "max_ms": 5
+      "min_ms": 2,
+      "max_ms": 6
     }
   ],
   "kernel_types": ["busy_wait", "compute", "memory", "mixed"]

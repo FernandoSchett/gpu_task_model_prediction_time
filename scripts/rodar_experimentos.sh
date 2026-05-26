@@ -17,9 +17,9 @@ DEFAULT_DEVICE="${DEFAULT_DEVICE:-0}"
 SYNC_MODE="${SYNC_MODE:-blocking}"
 WARMUP_KERNELS="${WARMUP_KERNELS:-20}"
 FLUSH_EVERY="${FLUSH_EVERY:-1000}"
-GPU_TELEMETRY="${GPU_TELEMETRY:-on}"
-GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-off}"
-TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-1000}"
+GPU_TELEMETRY="${GPU_TELEMETRY:-}"
+GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-}"
+TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-}"
 EXPERIMENT_CONFIG="${EXPERIMENT_CONFIG:-sweep_padrao}"
 EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/${EXPERIMENT_CONFIG}.json}"
 
@@ -79,6 +79,9 @@ bash_array("SEEDS", require("seeds"))
 bash_array("THREADS_PER_PROCESS", require("threads_per_process"))
 bash_scalar("KERNELS_PER_THREAD", require("kernels_per_thread"))
 optional_bash_scalar("WARMUP_KERNELS", config.get("warmup_kernels"))
+optional_bash_scalar("JSON_GPU_TELEMETRY", config.get("gpu_telemetry"))
+optional_bash_scalar("JSON_GPU_TELEMETRY_DURING", config.get("gpu_telemetry_during"))
+optional_bash_scalar("JSON_TELEMETRY_INTERVAL_MS", config.get("telemetry_interval_ms"))
 bash_array("BLOCKS_X", require("blocks_x"))
 bash_array("THREADS_PER_BLOCK", require("threads_per_block"))
 bash_scalar("GRID_Z", require("grid_z"))
@@ -94,10 +97,15 @@ bash_array("KERNEL_TYPES", require("kernel_types"))
 PY
 )"
 
+GPU_TELEMETRY="${JSON_GPU_TELEMETRY:-${GPU_TELEMETRY:-on}}"
+GPU_TELEMETRY_DURING="${JSON_GPU_TELEMETRY_DURING:-${GPU_TELEMETRY_DURING:-off}}"
+TELEMETRY_INTERVAL_MS="${JSON_TELEMETRY_INTERVAL_MS:-${TELEMETRY_INTERVAL_MS:-1000}}"
+
 mkdir -p "${OUTPUT_DIR}"
 make
 
 echo "Usando configuracao de experimento: ${EXPERIMENT_CONFIG_PATH}"
+echo "Telemetria GPU: gpu_telemetry=${GPU_TELEMETRY}, gpu_telemetry_during=${GPU_TELEMETRY_DURING}, telemetry_interval_ms=${TELEMETRY_INTERVAL_MS}"
 
 for ranks in "${MPI_RANKS[@]}"; do
   for threads in "${THREADS_PER_PROCESS[@]}"; do

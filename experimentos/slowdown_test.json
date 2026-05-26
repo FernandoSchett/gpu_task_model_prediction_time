@@ -1,12 +1,15 @@
 {
   "name": "slowdown_test",
   "description": "Teste simples baseline vs stress para medir slowdown e comparar p95.",
+  "gpu_telemetry": "on",
+  "gpu_telemetry_during": "on",
+  "telemetry_interval_ms": 200,
   "runs": [
     {
       "experiment_name": "baseline",
       "mpi_ranks": 1,
       "threads_per_process": 1,
-      "kernels_per_thread": 300,
+      "kernels_per_thread": 1000,
       "arrival_min_ms": 1,
       "arrival_max_ms": 5,
       "kernel_min_us": 100,
@@ -21,7 +24,7 @@
       "experiment_name": "stress",
       "mpi_ranks": 4,
       "threads_per_process": 8,
-      "kernels_per_thread": 300,
+      "kernels_per_thread": 1000,
       "arrival_min_ms": 0,
       "arrival_max_ms": 0,
       "kernel_min_us": 500,

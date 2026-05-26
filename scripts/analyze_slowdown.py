@@ -18,7 +18,7 @@ REQUIRED_COLUMNS = {
 def to_float(row, key):
     try:
         return float(row.get(key, ""))
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
