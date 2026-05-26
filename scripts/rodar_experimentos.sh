@@ -53,22 +53,38 @@ def bash_scalar(name, value):
     print(f"{name}={shlex.quote(str(value))}")
 
 
+def optional_bash_scalar(name, value):
+    if value is not None:
+        bash_scalar(name, value)
+
+
 def range_value(item, min_key, max_key):
     if isinstance(item, str):
         return item
     return f"{item[min_key]}:{item[max_key]}"
 
 
+def kernel_range_value(item):
+    if isinstance(item, str):
+        return item
+    if "min_us" in item and "max_us" in item:
+        return f"{item['min_us']}:{item['max_us']}"
+    if "min_s" in item and "max_s" in item:
+        return f"{int(float(item['min_s']) * 1_000_000)}:{int(float(item['max_s']) * 1_000_000)}"
+    raise SystemExit("kernel_ranges deve usar min_us/max_us ou min_s/max_s")
+
+
 bash_array("MPI_RANKS", require("mpi_ranks"))
 bash_array("SEEDS", require("seeds"))
 bash_array("THREADS_PER_PROCESS", require("threads_per_process"))
 bash_scalar("KERNELS_PER_THREAD", require("kernels_per_thread"))
+optional_bash_scalar("WARMUP_KERNELS", config.get("warmup_kernels"))
 bash_array("BLOCKS_X", require("blocks_x"))
 bash_array("THREADS_PER_BLOCK", require("threads_per_block"))
 bash_scalar("GRID_Z", require("grid_z"))
 bash_array(
     "KERNEL_RANGES",
-    [range_value(item, "min_us", "max_us") for item in require("kernel_ranges")],
+    [kernel_range_value(item) for item in require("kernel_ranges")],
 )
 bash_array(
     "ARRIVAL_RANGES",
@@ -95,8 +111,10 @@ for ranks in "${MPI_RANKS[@]}"; do
               for seed in "${SEEDS[@]}"; do
 
                 experiment_name="s${seed}_r${ranks}_t${threads}_k${KERNELS_PER_THREAD}_w${WARMUP_KERNELS}_kt${kernel_type}_bx${blocks_x}_tpb${threads_per_block}_gz${GRID_Z}_ku${kernel_min_us}-${kernel_max_us}_am${arrival_min_ms}-${arrival_max_ms}"
+                experiment_output_dir="${OUTPUT_DIR}/${experiment_name}"
+                mkdir -p "${experiment_output_dir}"
 
-                echo "Running ${experiment_name}"
+                echo "Running ${experiment_name} -> ${experiment_output_dir}"
                 mpirun -np "${ranks}" ./main \
                   --threads-per-process "${threads}" \
                   --kernels-per-thread "${KERNELS_PER_THREAD}" \

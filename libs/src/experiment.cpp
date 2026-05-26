@@ -31,7 +31,6 @@ constexpr std::uint64_t kWarmupSeedSalt = 0x9E3779B97F4A7C15ULL;
 struct ExperimentRuntimeState {
     std::atomic<std::uint64_t> rank_submitted_count{0};
     std::atomic<std::uint64_t> rank_completed_count{0};
-    std::atomic<std::uint64_t> active_kernels{0};
     std::atomic<std::int64_t> measurement_start_ns{0};
 };
 
@@ -130,7 +129,7 @@ std::filesystem::path output_file_path(const ExperimentConfig &config,
              << mpi_rank
              << ".csv";
 
-    return std::filesystem::path(config.output_dir) / filename.str();
+    return std::filesystem::path(config.output_dir) / safe_name / filename.str();
 }
 
 std::filesystem::path telemetry_file_path(const ExperimentConfig &config,
@@ -148,7 +147,7 @@ std::filesystem::path telemetry_file_path(const ExperimentConfig &config,
              << mpi_rank
              << ".csv";
 
-    return std::filesystem::path(config.output_dir) / filename.str();
+    return std::filesystem::path(config.output_dir) / safe_name / filename.str();
 }
 
 std::uint64_t compute_global_kernel_id(const ExperimentConfig &config,
@@ -192,10 +191,6 @@ void record_thread_error(std::vector<std::string> &errors,
     std::ostringstream out;
     out << "host_thread_id=" << host_thread_id << ": " << message;
     errors.push_back(out.str());
-}
-
-std::uint64_t estimate_global_count(std::uint64_t rank_local_count, int mpi_world_size) {
-    return rank_local_count * static_cast<std::uint64_t>(mpi_world_size > 0 ? mpi_world_size : 1);
 }
 
 std::uint64_t ceil_div(std::uint64_t numerator, std::uint64_t denominator) {
@@ -317,8 +312,6 @@ void run_host_thread(const ExperimentConfig &config,
                     runtime_state.rank_completed_count.load(std::memory_order_acquire);
                 const std::uint64_t submitted_before_rank =
                     runtime_state.rank_submitted_count.fetch_add(1, std::memory_order_acq_rel);
-                const std::uint64_t active_before_rank =
-                    runtime_state.active_kernels.fetch_add(1, std::memory_order_acq_rel);
 
                 cudaError_t final_error = cudaEventRecord(start_event, stream);
                 if (final_error == cudaSuccess) {
@@ -352,39 +345,35 @@ void run_host_thread(const ExperimentConfig &config,
                     }
                 }
 
-                runtime_state.active_kernels.fetch_sub(1, std::memory_order_acq_rel);
                 runtime_state.rank_completed_count.fetch_add(1, std::memory_order_acq_rel);
 
-                const std::uint64_t submitted_before_global =
-                    estimate_global_count(submitted_before_rank, mpi_world_size);
-                const std::uint64_t completed_before_global =
-                    estimate_global_count(completed_before_rank, mpi_world_size);
-                const std::uint64_t active_before_global =
-                    estimate_global_count(active_before_rank, mpi_world_size);
                 const std::int64_t measurement_start_ns =
                     runtime_state.measurement_start_ns.load(std::memory_order_acquire);
                 const std::uint64_t warps_per_block =
                     ceil_div(static_cast<std::uint64_t>(config.threads_per_block), 32ULL);
                 const std::uint64_t total_warps = total_blocks * warps_per_block;
-                const double estimated_waves =
+                const double blocks_per_sm =
                     device_info.sm_count > 0
                         ? static_cast<double>(
                               static_cast<std::uint64_t>(config.blocks_x) *
                               static_cast<std::uint64_t>(config.grid_z)) /
                               static_cast<double>(device_info.sm_count)
                         : 0.0;
+                const int effective_workers = mpi_world_size * config.threads_per_process;
+                const double requested_busy_wait_s =
+                    static_cast<double>(requested_busy_wait_us) / 1000000.0;
+                const double workers_x_requested_busy_wait_us =
+                    static_cast<double>(effective_workers) * static_cast<double>(requested_busy_wait_us);
+                const double workers_x_total_warps =
+                    static_cast<double>(effective_workers) * static_cast<double>(total_warps);
+                const double workers_x_blocks_per_sm =
+                    static_cast<double>(effective_workers) * blocks_per_sm;
+                const double requested_busy_wait_us_per_arrival_ms =
+                    arrival_wait_ms > 0.0
+                        ? static_cast<double>(requested_busy_wait_us) / arrival_wait_ms
+                        : 0.0;
                 const double response_time_us =
                     static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
-                const std::int64_t cuda_event_elapsed_time_ns =
-                    cuda_event_elapsed_ms >= 0.0f
-                        ? static_cast<std::int64_t>(static_cast<double>(cuda_event_elapsed_ms) * 1000000.0)
-                        : -1;
-                const std::int64_t device_end_time_ns_approx =
-                    cuda_event_elapsed_time_ns >= 0 ? completion_time_ns : 0;
-                const std::int64_t device_start_time_ns_approx =
-                    cuda_event_elapsed_time_ns >= 0
-                        ? device_end_time_ns_approx - cuda_event_elapsed_time_ns
-                        : 0;
 
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
@@ -417,16 +406,14 @@ void run_host_thread(const ExperimentConfig &config,
                 record.total_cuda_threads = total_cuda_threads;
                 record.total_warps = total_warps;
                 record.warps_per_block = static_cast<int>(warps_per_block);
-                record.estimated_waves = estimated_waves;
-                record.active_kernels_estimate = active_before_global;
-                record.submitted_before_global = submitted_before_global;
-                record.completed_before_global = completed_before_global;
-                record.inflight_kernels_estimate =
-                    submitted_before_global >= completed_before_global
-                        ? submitted_before_global - completed_before_global
-                        : 0;
-                record.concurrent_kernels_estimate =
-                    active_before_global + static_cast<std::uint64_t>(mpi_world_size > 0 ? mpi_world_size : 1);
+                record.blocks_per_sm = blocks_per_sm;
+                record.total_blocks_per_sm = blocks_per_sm;
+                record.effective_workers = effective_workers;
+                record.requested_busy_wait_s = requested_busy_wait_s;
+                record.workers_x_requested_busy_wait_us = workers_x_requested_busy_wait_us;
+                record.workers_x_total_warps = workers_x_total_warps;
+                record.workers_x_blocks_per_sm = workers_x_blocks_per_sm;
+                record.requested_busy_wait_us_per_arrival_ms = requested_busy_wait_us_per_arrival_ms;
                 record.logical_stream_id = host_thread_id;
                 record.measurement_start_time_ns = measurement_start_ns;
                 record.time_since_experiment_start_us =
@@ -436,8 +423,6 @@ void run_host_thread(const ExperimentConfig &config,
                 record.submit_time_ns = submit_time_ns;
                 record.launch_return_time_ns = launch_return_time_ns;
                 record.completion_time_ns = completion_time_ns;
-                record.device_start_time_ns_approx = device_start_time_ns_approx;
-                record.device_end_time_ns_approx = device_end_time_ns_approx;
                 record.host_submit_time_ns = submit_time_ns;
                 record.host_completion_time_ns = completion_time_ns;
                 record.response_time_us = response_time_us;
@@ -541,9 +526,9 @@ void run_experiment(const ExperimentConfig &config,
 
     throw_on_cuda_error(cudaFree(nullptr), "CUDA context initialization");
 
-    std::filesystem::create_directories(config.output_dir);
     const std::filesystem::path csv_path = output_file_path(config, mpi_rank, run_timestamp);
     const std::filesystem::path telemetry_path = telemetry_file_path(config, mpi_rank, run_timestamp);
+    std::filesystem::create_directories(csv_path.parent_path());
     CsvWriter writer(csv_path.string(), static_cast<std::uint64_t>(config.flush_every));
     GpuTelemetryMonitor gpu_telemetry(config,
                                       mpi_world_size,

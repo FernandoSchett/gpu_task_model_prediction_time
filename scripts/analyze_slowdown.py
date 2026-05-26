@@ -49,7 +49,7 @@ def load_result_rows():
         print("Pasta resultados/ nao encontrada.")
         return rows
 
-    for csv_path in sorted(RESULTS_DIR.glob("resultados_experimentos_*.csv")):
+    for csv_path in sorted(RESULTS_DIR.rglob("resultados_experimentos_*.csv")):
         try:
             with csv_path.open("r", encoding="utf-8", newline="") as file:
                 reader = csv.DictReader(file)

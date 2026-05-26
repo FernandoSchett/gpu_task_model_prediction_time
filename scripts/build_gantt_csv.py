@@ -35,7 +35,7 @@ def to_float(row, key, default=0.0):
 
 
 def result_csv_paths(results_dir):
-    return sorted(path for path in results_dir.glob("*.csv") if path.name.startswith("resultados_experimentos_"))
+    return sorted(path for path in results_dir.rglob("*.csv") if path.name.startswith("resultados_experimentos_"))
 
 
 def add_interval(intervals, row, interval_type, start_ns, end_ns, origin_ns, source_file):
@@ -92,12 +92,9 @@ def main():
     for row in rows:
         submit_ns = to_int(row, "submit_time_ns")
         completion_ns = to_int(row, "completion_time_ns")
-        device_start_ns = to_int(row, "device_start_time_ns_approx")
-        device_end_ns = to_int(row, "device_end_time_ns_approx")
         source_file = row["source_file"]
 
         add_interval(intervals, row, "host_response", submit_ns, completion_ns, origin_ns, source_file)
-        add_interval(intervals, row, "device_execution_approx", device_start_ns, device_end_ns, origin_ns, source_file)
 
     intervals.sort(key=lambda item: (float(item["start_time_us"]), item["lane"], item["interval_type"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)

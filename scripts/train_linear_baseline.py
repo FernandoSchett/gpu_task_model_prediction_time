@@ -36,10 +36,13 @@ DEFAULT_FEATURES = (
     "total_cuda_threads",
     "total_warps",
     "warps_per_block",
-    "estimated_waves",
-    "active_kernels_estimate",
-    "inflight_kernels_estimate",
-    "concurrent_kernels_estimate",
+    "blocks_per_sm",
+    "total_blocks_per_sm",
+    "effective_workers",
+    "workers_x_requested_busy_wait_us",
+    "workers_x_total_warps",
+    "workers_x_blocks_per_sm",
+    "requested_busy_wait_us_per_arrival_ms",
     "arrival_wait_ms",
     "launch_overhead_us",
 )
@@ -98,7 +101,7 @@ def to_float(row: dict[str, str], name: str, default: float = math.nan) -> float
 
 def load_rows(results_dir: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for csv_path in sorted(results_dir.glob("resultados_experimentos_*.csv")):
+    for csv_path in sorted(results_dir.rglob("resultados_experimentos_*.csv")):
         with csv_path.open("r", encoding="utf-8", newline="") as file:
             reader = csv.DictReader(file)
             if reader.fieldnames is None or "response_time_us" not in reader.fieldnames:
@@ -120,6 +123,11 @@ def add_derived_features(row: dict[str, str]) -> dict[str, float]:
     total_blocks = to_float(row, "total_blocks", blocks_x * grid_z)
     total_threads = to_float(row, "total_cuda_threads", total_blocks * threads_per_block)
     total_warps = to_float(row, "total_warps", total_blocks * warps_per_block)
+    mpi_world_size = to_float(row, "mpi_world_size", 1.0)
+    threads_per_process = to_float(row, "threads_per_process", 1.0)
+    effective_workers = to_float(row, "effective_workers", mpi_world_size * threads_per_process)
+    blocks_per_sm = to_float(row, "blocks_per_sm", total_blocks / sm_count if sm_count > 0 else 0.0)
+    arrival_wait_ms = to_float(row, "arrival_wait_ms", 0.0)
     queueing_delay_us = to_float(row, "queueing_delay_us", response_us - requested_us)
     slowdown = to_float(
         row,
@@ -135,15 +143,20 @@ def add_derived_features(row: dict[str, str]) -> dict[str, float]:
             "total_cuda_threads": total_threads,
             "total_warps": total_warps,
             "warps_per_block": warps_per_block,
-            "estimated_waves": to_float(
+            "blocks_per_sm": blocks_per_sm,
+            "total_blocks_per_sm": to_float(row, "total_blocks_per_sm", blocks_per_sm),
+            "effective_workers": effective_workers,
+            "workers_x_requested_busy_wait_us": to_float(
                 row,
-                "estimated_waves",
-                total_blocks / sm_count if sm_count > 0 else 0.0,
+                "workers_x_requested_busy_wait_us",
+                effective_workers * requested_us,
             ),
-            "concurrent_kernels_estimate": to_float(
+            "workers_x_total_warps": to_float(row, "workers_x_total_warps", effective_workers * total_warps),
+            "workers_x_blocks_per_sm": to_float(row, "workers_x_blocks_per_sm", effective_workers * blocks_per_sm),
+            "requested_busy_wait_us_per_arrival_ms": to_float(
                 row,
-                "concurrent_kernels_estimate",
-                to_float(row, "active_kernels_estimate", 0.0),
+                "requested_busy_wait_us_per_arrival_ms",
+                requested_us / arrival_wait_ms if arrival_wait_ms > 0 else 0.0,
             ),
             "queueing_delay_us": queueing_delay_us,
             "slowdown": slowdown,

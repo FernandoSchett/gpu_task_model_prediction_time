@@ -1,0 +1,7 @@
+nohup: ignorando entrada
+make: Nada a ser feito para 'all'.
+Usando configuracao de experimento: experimentos/sweep_padrao.json
+Running s67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2 -> resultados/s67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2
+Running experiment 's67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2' with sync-mode=blocking, kernel-type=busy_wait, warmup-kernels=1, flush-every=1000, gpu-telemetry=on, gpu-telemetry-during=off, output-dir=resultados
+[rank 0] writing resultados/s67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2/resultados_experimentos_s67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2_seed_67_20260526_183926_rank_0.csv
+[rank 0] writing resultados/s67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2/gpu_telemetry_s67_r1_t1_k3_w1_ktbusy_wait_bx16_tpb128_gz1_ku1000000-2000000_am0.5-2_seed_67_20260526_183926_rank_0.csv

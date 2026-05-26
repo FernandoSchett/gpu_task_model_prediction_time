@@ -65,12 +65,14 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "total_cuda_threads,"
           << "total_warps,"
           << "warps_per_block,"
-          << "estimated_waves,"
-          << "active_kernels_estimate,"
-          << "submitted_before_global,"
-          << "completed_before_global,"
-          << "inflight_kernels_estimate,"
-          << "concurrent_kernels_estimate,"
+          << "blocks_per_sm,"
+          << "total_blocks_per_sm,"
+          << "effective_workers,"
+          << "requested_busy_wait_s,"
+          << "workers_x_requested_busy_wait_us,"
+          << "workers_x_total_warps,"
+          << "workers_x_blocks_per_sm,"
+          << "requested_busy_wait_us_per_arrival_ms,"
           << "logical_stream_id,"
           << "measurement_start_time_ns,"
           << "time_since_experiment_start_us,"
@@ -79,8 +81,6 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "submit_time_ns,"
           << "launch_return_time_ns,"
           << "completion_time_ns,"
-          << "device_start_time_ns_approx,"
-          << "device_end_time_ns_approx,"
           << "host_submit_time_ns,"
           << "host_completion_time_ns,"
           << "response_time_us,"
@@ -122,12 +122,14 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.total_cuda_threads << ','
           << record.total_warps << ','
           << record.warps_per_block << ','
-          << std::fixed << std::setprecision(6) << record.estimated_waves << ','
-          << record.active_kernels_estimate << ','
-          << record.submitted_before_global << ','
-          << record.completed_before_global << ','
-          << record.inflight_kernels_estimate << ','
-          << record.concurrent_kernels_estimate << ','
+          << std::fixed << std::setprecision(6) << record.blocks_per_sm << ','
+          << std::fixed << std::setprecision(6) << record.total_blocks_per_sm << ','
+          << record.effective_workers << ','
+          << std::fixed << std::setprecision(6) << record.requested_busy_wait_s << ','
+          << std::fixed << std::setprecision(3) << record.workers_x_requested_busy_wait_us << ','
+          << std::fixed << std::setprecision(3) << record.workers_x_total_warps << ','
+          << std::fixed << std::setprecision(6) << record.workers_x_blocks_per_sm << ','
+          << std::fixed << std::setprecision(6) << record.requested_busy_wait_us_per_arrival_ms << ','
           << record.logical_stream_id << ','
           << record.measurement_start_time_ns << ','
           << std::fixed << std::setprecision(3) << record.time_since_experiment_start_us << ','
@@ -136,8 +138,6 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.submit_time_ns << ','
           << record.launch_return_time_ns << ','
           << record.completion_time_ns << ','
-          << record.device_start_time_ns_approx << ','
-          << record.device_end_time_ns_approx << ','
           << record.host_submit_time_ns << ','
           << record.host_completion_time_ns << ','
           << std::fixed << std::setprecision(3) << record.response_time_us << ','

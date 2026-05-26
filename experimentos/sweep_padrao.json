@@ -1,21 +1,22 @@
 {
-  "name": "sweep_moderado",
-  "description": "Sweep principal calibrado pelo slowdown_test para forcar a GPU de forma moderada, evitando o regime de stress extremo.",
+  "name": "sweep_segundos_sem_estimativas",
+  "description": "Sweep com duracoes em escala de segundos e somente features medidas ou deterministicas da configuracao/hardware.",
   "mpi_ranks": [1, 2],
   "seeds": [67],
   "threads_per_process": [1, 2, 4],
-  "kernels_per_thread": 300,
+  "kernels_per_thread": 3,
+  "warmup_kernels": 5,
   "blocks_x": [16, 32, 64],
   "threads_per_block": [128, 256],
   "grid_z": 1,
   "kernel_ranges": [
     {
-      "min_us": 100,
-      "max_us": 500
+      "min_s": 1,
+      "max_s": 2
     },
     {
-      "min_us": 500,
-      "max_us": 1200
+      "min_s": 2,
+      "max_s": 3
     }
   ],
   "arrival_ranges": [

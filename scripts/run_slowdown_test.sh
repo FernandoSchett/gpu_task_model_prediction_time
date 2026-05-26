@@ -43,7 +43,8 @@ while IFS=$'\t' read -r \
   seed \
   kernel_type; do
 
-  echo "Running ${experiment_name}"
+  mkdir -p "resultados/${experiment_name}"
+  echo "Running ${experiment_name} -> resultados/${experiment_name}"
   mpirun -np "${mpi_ranks}" ./main \
     --threads-per-process "${threads_per_process}" \
     --kernels-per-thread "${kernels_per_thread}" \
