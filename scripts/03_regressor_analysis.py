@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import pickle
 import re
 from pathlib import Path
 from typing import Iterable
@@ -26,6 +27,13 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.preprocessing import StandardScaler
+
+try:
+    from tensorflow import keras
+    from tensorflow.keras import layers
+    KERAS_AVAILABLE = True
+except ImportError:
+    KERAS_AVAILABLE = False
 
 try:
     import optuna
@@ -422,6 +430,49 @@ def predict_knn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, k:
     return model.predict(test_x)
 
 
+def build_cnn_model(input_dim: int) -> keras.Model:
+    """Build a simple CNN-like model for regression."""
+    model = keras.Sequential([
+        layers.Dense(128, activation='relu', input_dim=input_dim),
+        layers.Dropout(0.2),
+        layers.Dense(64, activation='relu'),
+        layers.Dropout(0.2),
+        layers.Dense(32, activation='relu'),
+        layers.Dropout(0.1),
+        layers.Dense(16, activation='relu'),
+        layers.Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    return model
+
+
+def train_cnn_model(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42) -> tuple:
+    """Train CNN model and return model and predictions."""
+    if not KERAS_AVAILABLE:
+        return None, None
+    
+    np.random.seed(seed)
+    model = build_cnn_model(train_x.shape[1])
+    
+    # Reshape for CNN (add channel dimension)
+    train_x_reshaped = train_x.reshape(train_x.shape[0], train_x.shape[1], 1)
+    test_x_reshaped = test_x.reshape(test_x.shape[0], test_x.shape[1], 1)
+    
+    # Train with early stopping
+    history = model.fit(
+        train_x_reshaped, train_y,
+        epochs=50,
+        batch_size=32,
+        validation_split=0.2,
+        verbose=0,
+        callbacks=[keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)]
+    )
+    
+    # Predict
+    pred = model.predict(test_x_reshaped, verbose=0).flatten()
+    return model, pred
+
+
 def save_metrics_csv(output_dir: Path, rows: list[dict[str, float | str]]) -> Path:
     path = output_dir / "regression_metrics.csv"
     with path.open("w", encoding="utf-8", newline="") as file:
@@ -429,6 +480,17 @@ def save_metrics_csv(output_dir: Path, rows: list[dict[str, float | str]]) -> Pa
         writer.writeheader()
         writer.writerows(rows)
     return path
+
+
+def save_model(model, model_dir: Path, model_name: str) -> Path:
+    """Save trained model to disk using pickle or keras."""
+    model_path = model_dir / f"{model_name}.pkl"
+    try:
+        with model_path.open("wb") as f:
+            pickle.dump(model, f)
+    except Exception as e:
+        print(f"Warning: Could not save {model_name}: {e}")
+    return model_path
 
 
 def plot_metric(output_dir: Path, rows: list[dict[str, float | str]], metric: str) -> Path:
@@ -456,6 +518,9 @@ def train_and_plot(
     optimize_hyperparams: bool = False, optuna_trials: int = 20,
 ) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    models_dir = output_dir / "trained_models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    
     if not paths:
         raise SystemExit("Nenhum CSV de resultados encontrado.")
     x, y, _ = load_matrix_compare(paths, target)
@@ -468,14 +533,17 @@ def train_and_plot(
     results: list[dict[str, float | str]] = []
 
     lr_model = fit_linear(train_x_std, train_y)
+    save_model(lr_model, models_dir, "linear_regression")
     results.append({"model": "Linear Regression", **metrics(test_y, predict_linear(lr_model, test_x_std))})
 
     ridge_model = fit_ridge(train_x_std, train_y, alpha=1.0)
+    save_model(ridge_model, models_dir, "ridge_regression")
     results.append({"model": "Ridge Regression", **metrics(test_y, predict_linear(ridge_model, test_x_std))})
 
     train_quad = quadratic_features(train_x_std)
     test_quad = quadratic_features(test_x_std)
     poly_model = fit_ridge(train_quad, train_y, alpha=1.0)
+    save_model(poly_model, models_dir, "polynomial_ridge")
     results.append({"model": "Polynomial Ridge", **metrics(test_y, predict_linear(poly_model, test_quad))})
 
     if optimize_hyperparams:
@@ -484,6 +552,7 @@ def train_and_plot(
     else:
         tree_model = DecisionTreeRegressor(max_depth=10, min_samples_leaf=100, random_state=seed)
     tree_model.fit(train_x, train_y)
+    save_model(tree_model, models_dir, "decision_tree")
     results.append({"model": "Decision Tree", **metrics(test_y, tree_model.predict(test_x))})
 
     if optimize_hyperparams:
@@ -492,6 +561,7 @@ def train_and_plot(
     else:
         forest_model = RandomForestRegressor(n_estimators=100, max_depth=10, min_samples_leaf=100, random_state=seed, n_jobs=-1)
     forest_model.fit(train_x, train_y)
+    save_model(forest_model, models_dir, "random_forest")
     results.append({"model": "Random Forest", **metrics(test_y, forest_model.predict(test_x))})
 
     if optimize_hyperparams:
@@ -500,14 +570,40 @@ def train_and_plot(
     else:
         boosting_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=seed)
     boosting_model.fit(train_x, train_y)
+    save_model(boosting_model, models_dir, "gradient_boosting")
     results.append({"model": "Gradient Boosting", **metrics(test_y, boosting_model.predict(test_x))})
 
     knn_pred = predict_knn(train_x_std, train_y, test_x_std, knn_k, knn_train_limit)
     results.append({"model": "kNN Regression", **metrics(test_y, knn_pred)})
 
+    # CNN Model
+    if KERAS_AVAILABLE:
+        try:
+            cnn_model, cnn_pred = train_cnn_model(train_x_std, train_y, test_x_std, seed)
+            if cnn_model is not None and cnn_pred is not None:
+                cnn_model.save(str(models_dir / "cnn_model.h5"))
+                results.append({"model": "CNN Neural Network", **metrics(test_y, cnn_pred)})
+            else:
+                print("Warning: CNN training returned None")
+        except Exception as e:
+            print(f"Warning: CNN training failed: {e}")
+    else:
+        print("Warning: TensorFlow/Keras not available for CNN model")
+
     metrics_path = save_metrics_csv(output_dir, results)
     plot_paths = [plot_metric(output_dir, results, metric) for metric in ("MAE", "RMSE", "R2")]
     best = min(results, key=lambda row: float(row["RMSE"]))
+
+    # Save models info
+    models_info_path = models_dir / "models_info.txt"
+    with models_info_path.open("w", encoding="utf-8") as f:
+        f.write(f"Target: {target}\n")
+        f.write(f"Training set size: {len(train_y)}\n")
+        f.write(f"Test set size: {len(test_y)}\n")
+        f.write(f"Features: {train_x.shape[1]}\n")
+        f.write(f"Models saved:\n")
+        for model_file in sorted(models_dir.glob("*.pkl")) + sorted(models_dir.glob("*.h5")):
+            f.write(f"  - {model_file.name}\n")
 
     return {
         "source_files": str(len(paths)),
@@ -523,6 +619,7 @@ def train_and_plot(
         "mae_plot": str(plot_paths[0]),
         "rmse_plot": str(plot_paths[1]),
         "r2_plot": str(plot_paths[2]),
+        "models_dir": str(models_dir),
     }
 
 
@@ -544,11 +641,11 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
         )
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)
-        print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f}")
+        print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f} models_dir={result['models_dir']}")
 
     summary_path = args.analysis_dir / "training_summary.csv"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["label", "target", "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "best_model", "best_mae", "best_rmse", "best_r2", "metrics_csv", "mae_plot", "rmse_plot", "r2_plot"]
+    fieldnames = ["label", "target", "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "best_model", "best_mae", "best_rmse", "best_r2", "metrics_csv", "mae_plot", "rmse_plot", "r2_plot", "models_dir"]
     with summary_path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -569,7 +666,7 @@ def mode_compare(args: argparse.Namespace) -> int:
     print(f"target: {args.target}")
     print(f"cv_folds: {args.cv_folds}")
     print(f"optimize_hyperparams: {args.optimize_hyperparams}")
-    for key in ("source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "metrics_csv", "mae_plot", "rmse_plot", "r2_plot", "best_model", "best_rmse", "best_r2"):
+    for key in ("source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "metrics_csv", "mae_plot", "rmse_plot", "r2_plot", "models_dir", "best_model", "best_rmse", "best_r2"):
         print(f"{key}: {result[key]}")
     return 0
 

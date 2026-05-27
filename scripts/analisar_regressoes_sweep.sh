@@ -38,7 +38,7 @@ if [[ -z "${ANALYSIS_DIR}" ]]; then
   ANALYSIS_DIR="resultados/analises_regressao/$(basename "${first_results_dir}")"
 fi
 
-python3 scripts/gerar_resultados_sweep.py \
+python3 scripts/02_gerar_resultados_sweep.py \
   --results-dir ${RESULTS_DIRS} \
   --analysis-dir "${ANALYSIS_DIR}" \
   --targets ${TARGETS} \
@@ -59,4 +59,4 @@ if [[ "${OPTIMIZE_HYPERPARAMS}" == "true" ]] || [[ "${OPTIMIZE_HYPERPARAMS}" == 
   COMPARE_ARGS+=(--optimize-hyperparams)
 fi
 
-python3 scripts/regressor_analysis.py "${COMPARE_ARGS[@]}"
+python3 scripts/03_regressor_analysis.py "${COMPARE_ARGS[@]}"
