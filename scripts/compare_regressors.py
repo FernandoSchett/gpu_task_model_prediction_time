@@ -215,8 +215,10 @@ class SimpleGradientBoostingRegressor:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    parser.add_argument("--results-dir", type=Path, nargs="+", default=[DEFAULT_RESULTS_DIR])
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--analysis-dir", type=Path, default=None)
+    parser.add_argument("--jobs-file", type=Path, default=None)
     parser.add_argument("--target", choices=TARGETS, default="response_time_us")
     parser.add_argument("--first-sweep", action="store_true", help="Use first occurrence of each sweep config/rank.")
     parser.add_argument(
@@ -232,24 +234,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def result_paths(results_dir: Path, first_sweep: bool, include_regex: str = "") -> list[Path]:
-    paths = sorted(results_dir.rglob("resultados_experimentos_*.csv"))
+def result_paths(results_dirs: Path | list[Path], first_sweep: bool, include_regex: str = "") -> list[Path]:
+    if isinstance(results_dirs, Path):
+        results_dirs = [results_dirs]
+    paths = sorted(
+        path
+        for results_dir in results_dirs
+        for path in results_dir.rglob("resultados_experimentos_*.csv")
+    )
     if include_regex:
         pattern_filter = re.compile(include_regex)
         paths = [path for path in paths if pattern_filter.search(str(path))]
     if not first_sweep:
         return paths
 
-    pattern = re.compile(r"resultados_experimentos_(.+)_seed_67_(\d{8}_\d{6})_rank_(\d+)\.csv$")
-    chosen: dict[tuple[str, str], tuple[str, Path]] = {}
+    pattern = re.compile(r"resultados_experimentos_(.+)_seed_(\d+)_(\d{8}_\d{6})_rank_(\d+)\.csv$")
+    chosen: dict[tuple[str, str, str], tuple[str, Path]] = {}
     for path in paths:
-        if not path.name.startswith("resultados_experimentos_s67_"):
-            continue
         match = pattern.match(path.name)
         if not match:
             continue
-        experiment_name, timestamp, rank = match.groups()
-        key = (experiment_name, rank)
+        experiment_name, seed, timestamp, rank = match.groups()
+        key = (experiment_name, seed, rank)
         if key not in chosen or timestamp < chosen[key][0]:
             chosen[key] = (timestamp, path)
     return sorted(path for _, path in chosen.values())
@@ -441,22 +447,27 @@ def plot_metric(output_dir: Path, rows: list[dict[str, float | str]], metric: st
     return path
 
 
-def main() -> int:
-    args = parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    paths = result_paths(args.results_dir, args.first_sweep, args.include_regex)
+def train_and_plot(
+    paths: list[Path],
+    target: str,
+    output_dir: Path,
+    max_rows: int,
+    test_fraction: float,
+    seed: int,
+    knn_k: int,
+    knn_train_limit: int,
+) -> dict[str, str]:
+    output_dir.mkdir(parents=True, exist_ok=True)
     if not paths:
-        print("Nenhum CSV de resultados encontrado.")
-        return 1
+        raise SystemExit("Nenhum CSV de resultados encontrado.")
 
-    x, y, _ = load_matrix(paths, args.target)
+    x, y, _ = load_matrix(paths, target)
     if len(y) == 0:
-        print("Nenhuma linha valida apos filtrar CSVs.")
-        return 1
+        raise SystemExit("Nenhuma linha valida apos filtrar CSVs.")
 
     original_rows = len(y)
-    x, y = deterministic_sample(x, y, args.max_rows, args.seed)
-    train_x, test_x, train_y, test_y = train_test_split(x, y, args.test_fraction, args.seed)
+    x, y = deterministic_sample(x, y, max_rows, seed)
+    train_x, test_x, train_y, test_y = train_test_split(x, y, test_fraction, seed)
     train_x_std, test_x_std = standardize(train_x, test_x)
 
     results: list[dict[str, float | str]] = []
@@ -472,37 +483,134 @@ def main() -> int:
     coef = fit_ridge(train_quad, train_y, alpha=1.0)
     results.append({"model": "Polynomial Ridge", **metrics(test_y, predict_linear(test_quad, coef))})
 
-    tree = SimpleDecisionTreeRegressor(max_depth=10, min_samples_leaf=100, rng=np.random.default_rng(args.seed))
+    tree = SimpleDecisionTreeRegressor(max_depth=10, min_samples_leaf=100, rng=np.random.default_rng(seed))
     tree.fit(train_x, train_y)
     results.append({"model": "Decision Tree", **metrics(test_y, tree.predict(test_x))})
 
-    forest = SimpleRandomForestRegressor(n_estimators=12, max_depth=10, min_samples_leaf=100, seed=args.seed)
+    forest = SimpleRandomForestRegressor(n_estimators=12, max_depth=10, min_samples_leaf=100, seed=seed)
     forest.fit(train_x, train_y)
     results.append({"model": "Random Forest", **metrics(test_y, forest.predict(test_x))})
 
-    boosting = SimpleGradientBoostingRegressor(n_estimators=24, learning_rate=0.08, max_depth=3, min_samples_leaf=120, seed=args.seed)
+    boosting = SimpleGradientBoostingRegressor(n_estimators=24, learning_rate=0.08, max_depth=3, min_samples_leaf=120, seed=seed)
     boosting.fit(train_x, train_y)
     results.append({"model": "Gradient Boosting", **metrics(test_y, boosting.predict(test_x))})
 
-    knn_pred = predict_knn(train_x_std, train_y, test_x_std, args.knn_k, args.knn_train_limit)
+    knn_pred = predict_knn(train_x_std, train_y, test_x_std, knn_k, knn_train_limit)
     results.append({"model": "kNN Regression", **metrics(test_y, knn_pred)})
 
-    metrics_path = save_metrics_csv(args.output_dir, results)
-    plot_paths = [plot_metric(args.output_dir, results, metric) for metric in ("MAE", "RMSE", "R2")]
+    metrics_path = save_metrics_csv(output_dir, results)
+    plot_paths = [plot_metric(output_dir, results, metric) for metric in ("MAE", "RMSE", "R2")]
+    best = min(results, key=lambda row: float(row["RMSE"]))
+
+    return {
+        "source_files": str(len(paths)),
+        "rows_loaded": str(original_rows),
+        "rows_used": str(len(y)),
+        "train_rows": str(len(train_y)),
+        "test_rows": str(len(test_y)),
+        "best_model": str(best["model"]),
+        "best_mae": f"{float(best['MAE']):.6f}",
+        "best_rmse": f"{float(best['RMSE']):.6f}",
+        "best_r2": f"{float(best['R2']):.6f}",
+        "metrics_csv": str(metrics_path),
+        "mae_plot": str(plot_paths[0]),
+        "rmse_plot": str(plot_paths[1]),
+        "r2_plot": str(plot_paths[2]),
+    }
+
+
+def load_jobs(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8", newline="") as file:
+        return list(csv.DictReader(file))
+
+
+def run_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
+    if args.analysis_dir is None:
+        raise SystemExit("--analysis-dir e obrigatorio quando --jobs-file e usado.")
+    jobs = load_jobs(jobs_file)
+    rows: list[dict[str, str]] = []
+    for job in jobs:
+        paths = result_paths(args.results_dir, args.first_sweep, job["include_regex"])
+        result = train_and_plot(
+            paths,
+            job["target"],
+            Path(job["output_dir"]),
+            args.max_rows,
+            args.test_fraction,
+            args.seed,
+            args.knn_k,
+            args.knn_train_limit,
+        )
+        row = {"label": job["label"], "target": job["target"], **result}
+        rows.append(row)
+        print(
+            f"{job['label']} {job['target']}: files={result['source_files']} "
+            f"rows={result['rows_loaded']} used={result['rows_used']} "
+            f"best={result['best_model']} rmse={float(result['best_rmse']):.3f} "
+            f"r2={float(result['best_r2']):.3f}"
+        )
+
+    summary_path = args.analysis_dir / "training_summary.csv"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "label",
+        "target",
+        "source_files",
+        "rows_loaded",
+        "rows_used",
+        "train_rows",
+        "test_rows",
+        "best_model",
+        "best_mae",
+        "best_rmse",
+        "best_r2",
+        "metrics_csv",
+        "mae_plot",
+        "rmse_plot",
+        "r2_plot",
+    ]
+    with summary_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"training_summary: {summary_path}")
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+    if args.jobs_file is not None:
+        return run_jobs(args, args.jobs_file)
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    paths = result_paths(args.results_dir, args.first_sweep, args.include_regex)
+    result = train_and_plot(
+        paths,
+        args.target,
+        args.output_dir,
+        args.max_rows,
+        args.test_fraction,
+        args.seed,
+        args.knn_k,
+        args.knn_train_limit,
+    )
 
     print(f"target: {args.target}")
-    print(f"source_files: {len(paths)}")
-    print(f"rows_loaded: {original_rows}")
-    print(f"rows_used: {len(y)}")
-    print(f"train_rows: {len(train_y)}")
-    print(f"test_rows: {len(test_y)}")
-    print(f"metrics_csv: {metrics_path}")
-    for path in plot_paths:
-        print(f"plot: {path}")
-    print("")
-    print(f"{'model':<20} {'MAE':>12} {'RMSE':>12} {'R2':>10}")
-    for row in results:
-        print(f"{row['model']:<20} {float(row['MAE']):>12.3f} {float(row['RMSE']):>12.3f} {float(row['R2']):>10.3f}")
+    for key in (
+        "source_files",
+        "rows_loaded",
+        "rows_used",
+        "train_rows",
+        "test_rows",
+        "metrics_csv",
+        "mae_plot",
+        "rmse_plot",
+        "r2_plot",
+        "best_model",
+        "best_rmse",
+        "best_r2",
+    ):
+        print(f"{key}: {result[key]}")
     return 0
 
 

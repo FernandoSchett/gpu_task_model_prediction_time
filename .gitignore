@@ -1,10 +1,74 @@
-main
-*.o
-*.csv
-resultados/
+# Build directories
 build/
-build-cmake/
-__pycache__/
-scripts/__pycache__/
-.env.local
+cmake-build-*/
+out/
+bin/
+lib/
+lib64/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Object files and binaries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# CUDA / profiling artifacts
+*.cubin
+*.fatbin
+*.ptx
+*.sass
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.nvprof
+
+# Debug files
+*.dSYM/
+*.pdb
+*.ilk
+
+# Generated results / experiments
+resultados/
+results/
+outputs/
+logs/
 *.log
+*.csv
+
+# Python scripts/cache used for analysis
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Environment files
+.env
+*.env
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
