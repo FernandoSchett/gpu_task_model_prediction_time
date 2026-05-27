@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
+import json
 import math
+import os
 import pickle
 import re
 from pathlib import Path
@@ -29,11 +32,32 @@ from sklearn.model_selection import cross_val_score, KFold
 from sklearn.preprocessing import StandardScaler
 
 try:
-    from tensorflow import keras
-    from tensorflow.keras import layers
-    KERAS_AVAILABLE = True
+    import lightgbm as lgb
+    LIGHTGBM_AVAILABLE = True
 except ImportError:
-    KERAS_AVAILABLE = False
+    LIGHTGBM_AVAILABLE = False
+
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+
+try:
+    from catboost import CatBoostRegressor
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+
+try:
+    from tabpfn import TabPFNRegressor  # type: ignore
+    TABPFN_AVAILABLE = True
+except ImportError:
+    try:
+        from tab_pfn import TabPFNRegressor  # type: ignore
+        TABPFN_AVAILABLE = True
+    except ImportError:
+        TABPFN_AVAILABLE = False
 
 try:
     import optuna
@@ -89,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--include-regex", default="", help="Only use result CSV paths matching this regular expression.")
     compare_parser.add_argument("--max-rows", type=int, default=120000, help="Deterministic sample size for model comparison.")
     compare_parser.add_argument("--test-fraction", type=float, default=0.25)
-    compare_parser.add_argument("--seed", type=int, default=42)
+    compare_parser.add_argument("--seed", type=int, default=42, help="(ignored) Seed is always read from .env via SEED=")
     compare_parser.add_argument("--knn-k", type=int, default=15)
     compare_parser.add_argument("--knn-train-limit", type=int, default=12000)
     compare_parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
@@ -110,6 +134,57 @@ def parse_args() -> argparse.Namespace:
 # ============================================================================
 # SHARED UTILITIES
 # ============================================================================
+
+def load_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env file in the same style as the C++ env_loader.
+
+    Supports:
+    - comments (#...)
+    - optional 'export ' prefix
+    - optional single/double quotes around values
+    """
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return values
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and ((value[0] == value[-1] == '"') or (value[0] == value[-1] == "'")):
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def seed_from_dotenv(repo_root: Path) -> int:
+    """Return the global seed from .env (key: SEED).
+
+    Requirement: all training randomness must use the seed from .env.
+    """
+    env_seed = os.getenv("SEED")
+    if env_seed is None or env_seed.strip() == "":
+        env = load_env_file(repo_root / ".env")
+        env_seed = env.get("SEED", "")
+    if env_seed is None or str(env_seed).strip() == "":
+        raise SystemExit("Missing SEED in .env (expected e.g. SEED=42).")
+    try:
+        seed = int(str(env_seed).strip())
+    except ValueError as exc:
+        raise SystemExit("Invalid SEED value in .env (expected a non-negative integer).") from exc
+    if seed < 0:
+        raise SystemExit("Invalid SEED value in .env (expected a non-negative integer).")
+    return seed
 
 def to_float(row: dict[str, str], name: str, default: float = math.nan) -> float:
     value = row.get(name, "")
@@ -209,11 +284,16 @@ def build_matrix(rows: Iterable[dict[str, str]], target: str) -> tuple[np.ndarra
     return np.asarray(x_rows, dtype=float), np.asarray(y_values, dtype=float), features
 
 
-def train_test_split(x: np.ndarray, y: np.ndarray, test_fraction: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def train_test_split(
+    x: np.ndarray,
+    y: np.ndarray,
+    test_fraction: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if not 0.0 < test_fraction < 1.0:
         raise SystemExit("--test-fraction must be between 0 and 1.")
     indices = np.arange(len(y))
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     rng.shuffle(indices)
     test_size = max(1, int(round(len(indices) * test_fraction)))
     test_idx = indices[:test_size]
@@ -333,11 +413,25 @@ def deterministic_sample(x: np.ndarray, y: np.ndarray, max_rows: int, seed: int)
     return x[idx], y[idx]
 
 
-def standardize(train_x: np.ndarray, test_x: np.ndarray):
+def standardize(train_x: np.ndarray, test_x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     mean = train_x.mean(axis=0)
     scale = train_x.std(axis=0)
     scale[scale == 0.0] = 1.0
-    return (train_x - mean) / scale, (test_x - mean) / scale
+    return (train_x - mean) / scale, (test_x - mean) / scale, mean, scale
+
+
+def save_preprocessing(models_dir: Path, feature_names: list[str], mean: np.ndarray, scale: np.ndarray) -> Path:
+    """Save standardization parameters required to reuse the saved models."""
+    path = models_dir / "preprocessing.json"
+    payload = {
+        "features": feature_names,
+        "standardize": {
+            "mean": [float(v) for v in mean.tolist()],
+            "scale": [float(v) for v in scale.tolist()],
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
 
 
 def optimize_tree_params(x: np.ndarray, y: np.ndarray, cv_folds: int, seed: int, n_trials: int = 20):
@@ -430,47 +524,111 @@ def predict_knn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, k:
     return model.predict(test_x)
 
 
-def build_cnn_model(input_dim: int) -> keras.Model:
-    """Build a simple CNN-like model for regression."""
-    model = keras.Sequential([
-        layers.Dense(128, activation='relu', input_dim=input_dim),
-        layers.Dropout(0.2),
-        layers.Dense(64, activation='relu'),
-        layers.Dropout(0.2),
-        layers.Dense(32, activation='relu'),
-        layers.Dropout(0.1),
-        layers.Dense(16, activation='relu'),
-        layers.Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-    return model
-
-
-def train_cnn_model(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42) -> tuple:
-    """Train CNN model and return model and predictions."""
-    if not KERAS_AVAILABLE:
+def train_lightgbm(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42, objective: str = "regression") -> tuple:
+    """Train LightGBM model."""
+    if not LIGHTGBM_AVAILABLE:
         return None, None
     
-    np.random.seed(seed)
-    model = build_cnn_model(train_x.shape[1])
-    
-    # Reshape for CNN (add channel dimension)
-    train_x_reshaped = train_x.reshape(train_x.shape[0], train_x.shape[1], 1)
-    test_x_reshaped = test_x.reshape(test_x.shape[0], test_x.shape[1], 1)
-    
-    # Train with early stopping
-    history = model.fit(
-        train_x_reshaped, train_y,
-        epochs=50,
-        batch_size=32,
-        validation_split=0.2,
-        verbose=0,
-        callbacks=[keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)]
+    model = lgb.LGBMRegressor(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=7,
+        num_leaves=31,
+        objective=objective,
+        random_state=seed,
+        n_jobs=-1,
+        verbose=-1
     )
+    model.fit(train_x, train_y, eval_set=[(test_x, train_y)], callbacks=[lgb.early_stopping(5)])
+    return model, model.predict(test_x)
+
+
+def train_xgboost(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42, objective: str = "reg:squarederror") -> tuple:
+    """Train XGBoost model."""
+    if not XGBOOST_AVAILABLE:
+        return None, None
     
-    # Predict
-    pred = model.predict(test_x_reshaped, verbose=0).flatten()
-    return model, pred
+    model = xgb.XGBRegressor(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=6,
+        objective=objective,
+        random_state=seed,
+        n_jobs=-1,
+        verbosity=0
+    )
+    model.fit(train_x, train_y, eval_set=[(test_x, train_y)], callbacks=[xgb.callback.EarlyStopping(rounds=5)])
+    return model, model.predict(test_x)
+
+
+def train_catboost(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42) -> tuple:
+    """Train CatBoost model."""
+    if not CATBOOST_AVAILABLE:
+        return None, None
+    
+    model = CatBoostRegressor(
+        iterations=100,
+        learning_rate=0.1,
+        depth=6,
+        random_state=seed,
+        verbose=0,
+        thread_count=-1
+    )
+    model.fit(train_x, train_y, eval_set=(test_x, train_y), early_stopping_rounds=5)
+    return model, model.predict(test_x)
+
+
+def train_tabpfn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42) -> tuple:
+    """Train TabPFN model (pretrained foundation model for tabular data)."""
+    if not TABPFN_AVAILABLE:
+        return None, None
+    
+    try:
+        model = TabPFNRegressor(device="cpu", n_ensemble=10, seed=seed)
+        model.fit(train_x, train_y)
+        return model, model.predict(test_x)
+    except Exception as e:
+        print(f"Warning: TabPFN training failed: {e}")
+        return None, None
+
+
+def train_lightgbm_quantile(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, quantile: float, seed: int = 42) -> tuple:
+    """Train LightGBM model with quantile regression objective."""
+    if not LIGHTGBM_AVAILABLE:
+        return None, None
+    
+    model = lgb.LGBMRegressor(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=7,
+        num_leaves=31,
+        objective="quantile",
+        alpha=quantile,
+        random_state=seed,
+        n_jobs=-1,
+        verbose=-1
+    )
+    model.fit(train_x, train_y, eval_set=[(test_x, train_y)], callbacks=[lgb.early_stopping(5)])
+    return model, model.predict(test_x)
+
+
+def train_xgboost_quantile(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, quantile: float, seed: int = 42) -> tuple:
+    """Train XGBoost model with quantile regression objective."""
+    if not XGBOOST_AVAILABLE:
+        return None, None
+    
+    model = xgb.XGBRegressor(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=6,
+        objective="reg:quantileerror",
+        quantile_alpha=quantile,
+        random_state=seed,
+        n_jobs=-1,
+        verbosity=0
+    )
+    model.fit(train_x, train_y, eval_set=[(test_x, train_y)], callbacks=[xgb.callback.EarlyStopping(rounds=5)])
+    return model, model.predict(test_x)
 
 
 def save_metrics_csv(output_dir: Path, rows: list[dict[str, float | str]]) -> Path:
@@ -576,19 +734,81 @@ def train_and_plot(
     knn_pred = predict_knn(train_x_std, train_y, test_x_std, knn_k, knn_train_limit)
     results.append({"model": "kNN Regression", **metrics(test_y, knn_pred)})
 
-    # CNN Model
-    if KERAS_AVAILABLE:
+    # LightGBM Model
+    if LIGHTGBM_AVAILABLE:
         try:
-            cnn_model, cnn_pred = train_cnn_model(train_x_std, train_y, test_x_std, seed)
-            if cnn_model is not None and cnn_pred is not None:
-                cnn_model.save(str(models_dir / "cnn_model.h5"))
-                results.append({"model": "CNN Neural Network", **metrics(test_y, cnn_pred)})
-            else:
-                print("Warning: CNN training returned None")
+            lgb_model, lgb_pred = train_lightgbm(train_x, train_y, test_x, seed)
+            if lgb_model is not None and lgb_pred is not None:
+                save_model(lgb_model, models_dir, "lightgbm")
+                results.append({"model": "LightGBM", **metrics(test_y, lgb_pred)})
         except Exception as e:
-            print(f"Warning: CNN training failed: {e}")
+            print(f"Warning: LightGBM training failed: {e}")
     else:
-        print("Warning: TensorFlow/Keras not available for CNN model")
+        print("Warning: LightGBM not available")
+
+    # XGBoost Model
+    if XGBOOST_AVAILABLE:
+        try:
+            xgb_model, xgb_pred = train_xgboost(train_x, train_y, test_x, seed)
+            if xgb_model is not None and xgb_pred is not None:
+                save_model(xgb_model, models_dir, "xgboost")
+                results.append({"model": "XGBoost", **metrics(test_y, xgb_pred)})
+        except Exception as e:
+            print(f"Warning: XGBoost training failed: {e}")
+    else:
+        print("Warning: XGBoost not available")
+
+    # CatBoost Model
+    if CATBOOST_AVAILABLE:
+        try:
+            cb_model, cb_pred = train_catboost(train_x, train_y, test_x, seed)
+            if cb_model is not None and cb_pred is not None:
+                save_model(cb_model, models_dir, "catboost")
+                results.append({"model": "CatBoost", **metrics(test_y, cb_pred)})
+        except Exception as e:
+            print(f"Warning: CatBoost training failed: {e}")
+    else:
+        print("Warning: CatBoost not available")
+
+    # LightGBM Quantile (p90, p95, p99)
+    if LIGHTGBM_AVAILABLE:
+        quantile_preds = []
+        for q in [0.90, 0.95, 0.99]:
+            try:
+                q_model, q_pred = train_lightgbm_quantile(train_x, train_y, test_x, q, seed)
+                if q_model is not None and q_pred is not None:
+                    quantile_preds.append(q_pred)
+            except Exception as e:
+                print(f"Warning: LightGBM Quantile {q} training failed: {e}")
+        if quantile_preds:
+            lgb_q_pred = np.mean(quantile_preds, axis=0)
+            results.append({"model": "LightGBM Quantile (p90/p95/p99)", **metrics(test_y, lgb_q_pred)})
+
+    # XGBoost Quantile (p90, p95, p99)
+    if XGBOOST_AVAILABLE:
+        quantile_preds = []
+        for q in [0.90, 0.95, 0.99]:
+            try:
+                q_model, q_pred = train_xgboost_quantile(train_x, train_y, test_x, q, seed)
+                if q_model is not None and q_pred is not None:
+                    quantile_preds.append(q_pred)
+            except Exception as e:
+                print(f"Warning: XGBoost Quantile {q} training failed: {e}")
+        if quantile_preds:
+            xgb_q_pred = np.mean(quantile_preds, axis=0)
+            results.append({"model": "XGBoost Quantile (p90/p95/p99)", **metrics(test_y, xgb_q_pred)})
+
+    # TabPFN Model (Pretrained Foundation Model)
+    if TABPFN_AVAILABLE:
+        try:
+            pfn_model, pfn_pred = train_tabpfn(train_x, train_y, test_x, seed)
+            if pfn_model is not None and pfn_pred is not None:
+                save_model(pfn_model, models_dir, "tabpfn")
+                results.append({"model": "TabPFN", **metrics(test_y, pfn_pred)})
+        except Exception as e:
+            print(f"Warning: TabPFN training failed: {e}")
+    else:
+        print("Warning: TabPFN not available")
 
     metrics_path = save_metrics_csv(output_dir, results)
     plot_paths = [plot_metric(output_dir, results, metric) for metric in ("MAE", "RMSE", "R2")]

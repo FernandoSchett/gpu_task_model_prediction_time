@@ -4,13 +4,16 @@ scikit-learn>=1.0.0
 matplotlib>=3.5.0
 pandas>=1.3.0
 
-# Optional: Hyperparameter Optimization
+# Hyperparameter Optimization
 optuna>=3.0.0
 
-# Optional: Deep Learning (CNN)
-tensorflow>=2.10.0
-# Or for CPU-only (lighter):
-# tensorflow-cpu>=2.10.0
+# Modern Gradient Boosting Libraries
+lightgbm>=3.3.0
+xgboost>=1.7.0
+catboost>=1.1.0
+
+# Tabular Foundation Model (Pretrained)
+tab-pfn>=0.1.0
 
 # Optional: Data Analysis
 seaborn>=0.12.0
