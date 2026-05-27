@@ -11,6 +11,9 @@ ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
 MAX_ROWS="${MAX_ROWS:-120000}"
 TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
+CV_FOLDS="${CV_FOLDS:-5}"
+OPTIMIZE_HYPERPARAMS="${OPTIMIZE_HYPERPARAMS:-false}"
+OPTUNA_TRIALS="${OPTUNA_TRIALS:-20}"
 
 matching_dirs() {
   local pattern="$1"
@@ -42,6 +45,9 @@ run_one() {
   MAX_ROWS="${MAX_ROWS}" \
   TARGETS="${TARGETS}" \
   GPU_TARGETS="${GPU_TARGETS}" \
+  CV_FOLDS="${CV_FOLDS}" \
+  OPTIMIZE_HYPERPARAMS="${OPTIMIZE_HYPERPARAMS}" \
+  OPTUNA_TRIALS="${OPTUNA_TRIALS}" \
   bash scripts/analisar_regressoes_sweep.sh
 }
 
