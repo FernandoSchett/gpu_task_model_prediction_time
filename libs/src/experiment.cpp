@@ -129,7 +129,7 @@ std::filesystem::path output_file_path(const ExperimentConfig &config,
              << mpi_rank
              << ".csv";
 
-    return std::filesystem::path(config.output_dir) / safe_name / filename.str();
+    return std::filesystem::path(config.output_dir) / filename.str();
 }
 
 std::filesystem::path telemetry_file_path(const ExperimentConfig &config,
@@ -147,7 +147,7 @@ std::filesystem::path telemetry_file_path(const ExperimentConfig &config,
              << mpi_rank
              << ".csv";
 
-    return std::filesystem::path(config.output_dir) / safe_name / filename.str();
+    return std::filesystem::path(config.output_dir) / filename.str();
 }
 
 std::uint64_t compute_global_kernel_id(const ExperimentConfig &config,

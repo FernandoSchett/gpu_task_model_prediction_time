@@ -5,12 +5,44 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+PRESERVED_ENV_VARS=(
+  OUTPUT_DIR
+  SWEEP_OUTPUT_DIR
+  RUN_TIMESTAMP
+  DEFAULT_DEVICE
+  SYNC_MODE
+  WARMUP_KERNELS
+  FLUSH_EVERY
+  GPU_TELEMETRY
+  GPU_TELEMETRY_DURING
+  TELEMETRY_INTERVAL_MS
+  EXPERIMENT_CONFIG
+  EXPERIMENT_CONFIG_PATH
+)
+for var_name in "${PRESERVED_ENV_VARS[@]}"; do
+  if [[ -v "${var_name}" ]]; then
+    printf -v "PRESERVED_${var_name}" "%s" "${!var_name}"
+    printf -v "PRESERVED_${var_name}_SET" "%s" "1"
+  else
+    printf -v "PRESERVED_${var_name}_SET" "%s" ""
+  fi
+done
+
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
   source .env
   set +a
 fi
+
+for var_name in "${PRESERVED_ENV_VARS[@]}"; do
+  set_var_name="PRESERVED_${var_name}_SET"
+  if [[ -n "${!set_var_name}" ]]; then
+    value_var_name="PRESERVED_${var_name}"
+    printf -v "${var_name}" "%s" "${!value_var_name}"
+    export "${var_name}"
+  fi
+done
 
 OUTPUT_DIR="${OUTPUT_DIR:-resultados}"
 DEFAULT_DEVICE="${DEFAULT_DEVICE:-0}"
@@ -75,6 +107,7 @@ def kernel_range_value(item):
 
 
 bash_array("SEEDS", require("seeds"))
+bash_scalar("CONFIG_NAME", config.get("name", path.rsplit("/", 1)[-1].rsplit(".", 1)[0]))
 bash_scalar("KERNELS_PER_THREAD", require("kernels_per_thread"))
 optional_bash_scalar("WARMUP_KERNELS", config.get("warmup_kernels"))
 optional_bash_scalar("JSON_GPU_TELEMETRY", config.get("gpu_telemetry"))
@@ -122,12 +155,15 @@ PY
 GPU_TELEMETRY="${JSON_GPU_TELEMETRY:-${GPU_TELEMETRY:-on}}"
 GPU_TELEMETRY_DURING="${JSON_GPU_TELEMETRY_DURING:-${GPU_TELEMETRY_DURING:-off}}"
 TELEMETRY_INTERVAL_MS="${JSON_TELEMETRY_INTERVAL_MS:-${TELEMETRY_INTERVAL_MS:-1000}}"
+RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+SWEEP_OUTPUT_DIR="${SWEEP_OUTPUT_DIR:-${OUTPUT_DIR}/${CONFIG_NAME}_${RUN_TIMESTAMP}}"
 
-mkdir -p "${OUTPUT_DIR}"
+mkdir -p "${SWEEP_OUTPUT_DIR}"
 make
 
 echo "Usando configuracao de experimento: ${EXPERIMENT_CONFIG_PATH}"
 echo "Telemetria GPU: gpu_telemetry=${GPU_TELEMETRY}, gpu_telemetry_during=${GPU_TELEMETRY_DURING}, telemetry_interval_ms=${TELEMETRY_INTERVAL_MS}"
+echo "Pasta do sweep: ${SWEEP_OUTPUT_DIR}"
 
 run_experiment_config() {
   local target_gpu_demand_percent="$1"
@@ -149,8 +185,7 @@ run_experiment_config() {
         for seed in "${SEEDS[@]}"; do
 
           experiment_name="s${seed}${target_tag}_r${ranks}_t${threads}_k${KERNELS_PER_THREAD}_w${WARMUP_KERNELS}_kt${kernel_type}_bx${blocks_x}_tpb${threads_per_block}_gz${GRID_Z}_ku${kernel_min_us}-${kernel_max_us}_am${arrival_min_ms}-${arrival_max_ms}"
-          experiment_output_dir="${OUTPUT_DIR}/${experiment_name}"
-          mkdir -p "${experiment_output_dir}"
+          experiment_output_dir="${SWEEP_OUTPUT_DIR}"
 
           echo "Running ${experiment_name} -> ${experiment_output_dir}"
           mpirun -np "${ranks}" ./main \
@@ -170,7 +205,7 @@ run_experiment_config() {
             --grid-z "${GRID_Z}" \
             --seed "${seed}" \
             --experiment-name "${experiment_name}" \
-            --output-dir "${OUTPUT_DIR}" \
+            --output-dir "${SWEEP_OUTPUT_DIR}" \
             --device "${DEFAULT_DEVICE}" \
             --sync-mode "${SYNC_MODE}" \
             --kernel-type "${kernel_type}" \

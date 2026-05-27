@@ -219,6 +219,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--target", choices=TARGETS, default="response_time_us")
     parser.add_argument("--first-sweep", action="store_true", help="Use first occurrence of each sweep config/rank.")
+    parser.add_argument(
+        "--include-regex",
+        default="",
+        help="Only use result CSV paths matching this regular expression.",
+    )
     parser.add_argument("--max-rows", type=int, default=120000, help="Deterministic sample size for model comparison.")
     parser.add_argument("--test-fraction", type=float, default=0.25)
     parser.add_argument("--seed", type=int, default=42)
@@ -227,8 +232,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def result_paths(results_dir: Path, first_sweep: bool) -> list[Path]:
+def result_paths(results_dir: Path, first_sweep: bool, include_regex: str = "") -> list[Path]:
     paths = sorted(results_dir.rglob("resultados_experimentos_*.csv"))
+    if include_regex:
+        pattern_filter = re.compile(include_regex)
+        paths = [path for path in paths if pattern_filter.search(str(path))]
     if not first_sweep:
         return paths
 
@@ -436,7 +444,7 @@ def plot_metric(output_dir: Path, rows: list[dict[str, float | str]], metric: st
 def main() -> int:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    paths = result_paths(args.results_dir, args.first_sweep)
+    paths = result_paths(args.results_dir, args.first_sweep, args.include_regex)
     if not paths:
         print("Nenhum CSV de resultados encontrado.")
         return 1
