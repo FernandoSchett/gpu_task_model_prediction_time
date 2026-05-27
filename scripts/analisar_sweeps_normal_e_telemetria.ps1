@@ -1,8 +1,10 @@
 param(
     [string]$NormalResultsDirs = "",
+    [string]$NormalResultsDir = "",
     [string]$TelemetryResultsDirs = "",
+    [string]$TelemetryResultsDir = "",
     [string]$AnalysisRoot = "resultados/analises_regressao",
-    [int]$MaxRows = 1200000000,
+    [long]$MaxRows = 9223372036854775807,
     [string]$Targets = "response_time_us queueing_delay_us slowdown",
     [string]$GpuTargets = "10 50 100 120",
     [int]$CvFolds = 5,
@@ -17,6 +19,10 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $PSCommandPath
 $repoRoot = Split-Path -Parent $scriptDir
 Set-Location $repoRoot
+
+# Support both singular and plural parameter names
+if ($NormalResultsDir -and -not $NormalResultsDirs) { $NormalResultsDirs = $NormalResultsDir }
+if ($TelemetryResultsDir -and -not $TelemetryResultsDirs) { $TelemetryResultsDirs = $TelemetryResultsDir }
 
 # Override from environment variables if set
 if ($env:NORMAL_RESULTS_DIRS) { $NormalResultsDirs = $env:NORMAL_RESULTS_DIRS }
@@ -76,7 +82,7 @@ function Invoke-Analysis {
     
     Write-Host "Gerando resultados do sweep..."
     $geradorArgs = @(
-        "scripts/gerar_resultados_sweep.py",
+        "scripts/02_gerar_resultados_sweep.py",
         "--analysis-dir", $analysisDir
     )
     
@@ -103,7 +109,7 @@ function Invoke-Analysis {
     
     # Build python command arguments for regressor_analysis
     $pythonArgs = @(
-        "scripts/regressor_analysis.py",
+        "scripts/03_regressor_analysis.py",
         "compare"
     )
     
