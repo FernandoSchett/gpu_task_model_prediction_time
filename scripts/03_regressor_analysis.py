@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import heapq
 import inspect
 import json
 import math
@@ -97,6 +98,40 @@ BASE_FEATURES = (
     "requested_busy_wait_us_per_arrival_ms",
     "target_gpu_demand_percent",
 )
+DEPENDENCE_MAX_LAG = 50
+DEPENDENCE_MI_BINS = 32
+DEPENDENCE_STATIC_FEATURES = tuple(
+    name for name in BASE_FEATURES
+    if name not in {"launch_overhead_us"}
+) + tuple(f"kernel_type_{name}" for name in KERNEL_TYPES)
+DEPENDENCE_PRESSURE_FEATURES = (
+    "pending_kernels_at_launch",
+    "in_flight_kernels_at_launch",
+    "effective_workers",
+    "workers_x_total_warps",
+    "workers_x_blocks_per_sm",
+    "target_gpu_demand_percent",
+    "requested_busy_wait_us_per_arrival_ms",
+    "arrival_wait_ms",
+    "launch_overhead_us",
+)
+DEPENDENCE_HEATMAP_FEATURES = (
+    "requested_busy_wait_us",
+    "arrival_wait_ms",
+    "mpi_world_size",
+    "threads_per_process",
+    "blocks_x",
+    "threads_per_block",
+    "total_warps",
+    "blocks_per_sm",
+    "effective_workers",
+    "workers_x_total_warps",
+    "workers_x_blocks_per_sm",
+    "target_gpu_demand_percent",
+    "pending_kernels_at_launch",
+    "in_flight_kernels_at_launch",
+    "launch_overhead_us",
+) + tuple(f"kernel_type_{name}" for name in KERNEL_TYPES)
 
 
 def parse_args() -> argparse.Namespace:
@@ -819,6 +854,597 @@ def plot_metric(output_dir: Path, rows: list[dict[str, float | str]], metric: st
     return path
 
 
+def run_id_from_path(path: Path) -> str:
+    match = re.match(r"resultados_experimentos_(.+)_seed_(\d+)_(\d{8}_\d{6})_rank_(\d+)\.csv$", path.name)
+    if not match:
+        return f"{path.parent.name}:{path.stem}"
+    experiment_name, seed, timestamp, _rank = match.groups()
+    return f"{path.parent.name}:{experiment_name}:seed{seed}:{timestamp}"
+
+
+def finite_float(value: object, default: float = math.nan) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
+
+
+def finite_values(values: Iterable[float]) -> np.ndarray:
+    array = np.asarray(list(values), dtype=float)
+    return array[np.isfinite(array)]
+
+
+def pearson_corr(x_values: Iterable[float], y_values: Iterable[float]) -> float:
+    x = np.asarray(list(x_values), dtype=float)
+    y = np.asarray(list(y_values), dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if int(mask.sum()) < 3:
+        return math.nan
+    x = x[mask]
+    y = y[mask]
+    if float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
+        return math.nan
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def rank_average(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=float)
+    sorted_values = values[order]
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and sorted_values[end] == sorted_values[start]:
+            end += 1
+        rank = (start + end - 1) / 2.0 + 1.0
+        ranks[order[start:end]] = rank
+        start = end
+    return ranks
+
+
+def spearman_corr(x_values: Iterable[float], y_values: Iterable[float]) -> float:
+    x = np.asarray(list(x_values), dtype=float)
+    y = np.asarray(list(y_values), dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if int(mask.sum()) < 3:
+        return math.nan
+    x = x[mask]
+    y = y[mask]
+    if len(np.unique(x)) < 2 or len(np.unique(y)) < 2:
+        return math.nan
+    return pearson_corr(rank_average(x), rank_average(y))
+
+
+def normalized_mutual_information(x_values: Iterable[float], y_values: Iterable[float], bins: int = DEPENDENCE_MI_BINS) -> float:
+    x = np.asarray(list(x_values), dtype=float)
+    y = np.asarray(list(y_values), dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if int(mask.sum()) < 8:
+        return math.nan
+    x = x[mask]
+    y = y[mask]
+    if len(np.unique(x)) < 2 or len(np.unique(y)) < 2:
+        return math.nan
+    adjusted_bins = max(4, min(bins, int(math.sqrt(len(x)))))
+    hist, _, _ = np.histogram2d(x, y, bins=adjusted_bins)
+    total = float(hist.sum())
+    if total <= 0.0:
+        return math.nan
+    pxy = hist / total
+    px = pxy.sum(axis=1)
+    py = pxy.sum(axis=0)
+    nz = pxy > 0
+    px_py = px[:, None] * py[None, :]
+    mi = float(np.sum(pxy[nz] * np.log(pxy[nz] / px_py[nz])))
+    hx = float(-np.sum(px[px > 0] * np.log(px[px > 0])))
+    hy = float(-np.sum(py[py > 0] * np.log(py[py > 0])))
+    if hx <= 0.0 or hy <= 0.0:
+        return math.nan
+    return mi / math.sqrt(hx * hy)
+
+
+def group_observations(observations: list[dict[str, float | str]]) -> dict[str, list[dict[str, float | str]]]:
+    groups: dict[str, list[dict[str, float | str]]] = {}
+    for observation in observations:
+        groups.setdefault(str(observation["run_id"]), []).append(observation)
+    for group in groups.values():
+        group.sort(key=lambda row: (finite_float(row.get("order_ns"), math.inf), str(row.get("source_file", "")), finite_float(row.get("row_index"), 0.0)))
+    return groups
+
+
+def grouped_lag_pairs(groups: dict[str, list[dict[str, float | str]]], series: str, lag: int) -> tuple[list[float], list[float]]:
+    previous: list[float] = []
+    current: list[float] = []
+    for group in groups.values():
+        values = [finite_float(row.get(series)) for row in group]
+        if len(values) <= lag:
+            continue
+        for index in range(lag, len(values)):
+            left = values[index - lag]
+            right = values[index]
+            if math.isfinite(left) and math.isfinite(right):
+                previous.append(left)
+                current.append(right)
+    return previous, current
+
+
+def grouped_acf(groups: dict[str, list[dict[str, float | str]]], series: str, max_lag: int) -> list[tuple[int, float, int]]:
+    rows: list[tuple[int, float, int]] = []
+    for lag in range(1, max_lag + 1):
+        previous, current = grouped_lag_pairs(groups, series, lag)
+        rows.append((lag, pearson_corr(previous, current), len(previous)))
+    return rows
+
+
+def grouped_lag_mi(groups: dict[str, list[dict[str, float | str]]], series: str, max_lag: int) -> list[tuple[int, float, int]]:
+    rows: list[tuple[int, float, int]] = []
+    for lag in range(1, max_lag + 1):
+        previous, current = grouped_lag_pairs(groups, series, lag)
+        rows.append((lag, normalized_mutual_information(previous, current), len(previous)))
+    return rows
+
+
+def durbin_watson_grouped(groups: dict[str, list[dict[str, float | str]]], series: str) -> float:
+    all_values = finite_values(finite_float(row.get(series)) for group in groups.values() for row in group)
+    if len(all_values) < 3:
+        return math.nan
+    mean = float(np.mean(all_values))
+    numerator = 0.0
+    denominator = 0.0
+    for group in groups.values():
+        values = [finite_float(row.get(series)) for row in group]
+        centered = [value - mean for value in values if math.isfinite(value)]
+        if len(centered) < 2:
+            continue
+        array = np.asarray(centered, dtype=float)
+        numerator += float(np.sum(np.diff(array) ** 2))
+        denominator += float(np.sum(array ** 2))
+    return numerator / denominator if denominator > 0.0 else math.nan
+
+
+def effective_sample_size(n_rows: int, acf_rows: list[tuple[int, float, int]]) -> float:
+    positive_sum = 0.0
+    for _lag, value, _pairs in acf_rows:
+        if not math.isfinite(value):
+            continue
+        if value <= 0.0:
+            continue
+        positive_sum += value
+    denominator = 1.0 + 2.0 * positive_sum
+    return n_rows / denominator if denominator > 0.0 else math.nan
+
+
+def temporal_sample_observations(
+    observations: list[dict[str, float | str]], max_rows: int
+) -> list[dict[str, float | str]]:
+    if max_rows <= 0 or len(observations) <= max_rows:
+        return observations
+    ordered = sorted(
+        observations,
+        key=lambda row: (str(row.get("run_id", "")), finite_float(row.get("order_ns"), math.inf), str(row.get("source_file", "")), finite_float(row.get("row_index"), 0.0)),
+    )
+    indices = np.linspace(0, len(ordered) - 1, max_rows, dtype=int)
+    return [ordered[int(index)] for index in indices]
+
+
+def load_dependency_observations(paths: list[Path], target: str, max_rows: int) -> tuple[list[dict[str, float | str]], int]:
+    observations: list[dict[str, float | str]] = []
+    for path in paths:
+        run_id = run_id_from_path(path)
+        with path.open("r", encoding="utf-8", newline="") as file:
+            reader = csv.DictReader(file)
+            if reader.fieldnames is None or "response_time_us" not in reader.fieldnames:
+                continue
+            for row_index, row in enumerate(reader):
+                if to_float(row, "cuda_error_code", 0.0) != 0.0:
+                    continue
+                values = row_features_compare(row)
+                target_value = values[target] if target in values else to_float(row, target)
+                if not math.isfinite(target_value):
+                    continue
+                submit_ns = to_float(row, "submit_time_ns", math.nan)
+                completion_ns = to_float(row, "completion_time_ns", math.nan)
+                measurement_start_ns = to_float(row, "measurement_start_time_ns", math.nan)
+                time_since_us = to_float(row, "time_since_experiment_start_us", math.nan)
+                fallback_ns = measurement_start_ns + time_since_us * 1000.0 if math.isfinite(measurement_start_ns) and math.isfinite(time_since_us) else math.nan
+                order_ns = submit_ns if math.isfinite(submit_ns) else fallback_ns
+                submitted_count = to_float(row, "rank_local_submitted_count", math.nan)
+                completed_count = to_float(row, "rank_local_completed_count", math.nan)
+                pending = submitted_count - completed_count if math.isfinite(submitted_count) and math.isfinite(completed_count) else math.nan
+                observation: dict[str, float | str] = {
+                    **values,
+                    "target_value": target_value,
+                    "target_residual": math.nan,
+                    "run_id": run_id,
+                    "source_file": path.name,
+                    "row_index": float(row_index),
+                    "submit_time_ns": submit_ns,
+                    "completion_time_ns": completion_ns,
+                    "order_ns": order_ns,
+                    "pending_kernels_at_launch": max(0.0, pending) if math.isfinite(pending) else math.nan,
+                    "in_flight_kernels_at_launch": math.nan,
+                }
+                observations.append(observation)
+
+    original_rows = len(observations)
+    observations = temporal_sample_observations(observations, max_rows)
+    compute_in_flight_counts(observations)
+    add_linear_residuals(observations)
+    return observations, original_rows
+
+
+def compute_in_flight_counts(observations: list[dict[str, float | str]]) -> None:
+    groups = group_observations(observations)
+    for group in groups.values():
+        heap: list[float] = []
+        for observation in group:
+            submit_ns = finite_float(observation.get("submit_time_ns"))
+            completion_ns = finite_float(observation.get("completion_time_ns"))
+            if not math.isfinite(submit_ns):
+                observation["in_flight_kernels_at_launch"] = math.nan
+                continue
+            while heap and heap[0] <= submit_ns:
+                heapq.heappop(heap)
+            observation["in_flight_kernels_at_launch"] = float(len(heap))
+            if math.isfinite(completion_ns) and completion_ns > submit_ns:
+                heapq.heappush(heap, completion_ns)
+
+
+def add_linear_residuals(observations: list[dict[str, float | str]]) -> None:
+    if len(observations) < 3:
+        return
+    features = [
+        name for name in DEPENDENCE_STATIC_FEATURES
+        if any(math.isfinite(finite_float(row.get(name))) for row in observations)
+    ]
+    x_rows: list[list[float]] = []
+    y_values: list[float] = []
+    row_indices: list[int] = []
+    for index, observation in enumerate(observations):
+        y = finite_float(observation.get("target_value"))
+        x = [finite_float(observation.get(name)) for name in features]
+        if math.isfinite(y) and all(math.isfinite(value) for value in x):
+            x_rows.append(x)
+            y_values.append(y)
+            row_indices.append(index)
+    if len(y_values) < 3:
+        return
+    y = np.asarray(y_values, dtype=float)
+    x = np.asarray(x_rows, dtype=float)
+    if x.size == 0:
+        residual = y - float(np.mean(y))
+    else:
+        scale = x.std(axis=0)
+        keep = scale > 0.0
+        if int(keep.sum()) == 0:
+            residual = y - float(np.mean(y))
+        else:
+            x = x[:, keep]
+            x = (x - x.mean(axis=0)) / x.std(axis=0)
+            design = np.column_stack([np.ones(len(y)), x])
+            coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+            residual = y - design @ coef
+    for index, value in zip(row_indices, residual):
+        observations[index]["target_residual"] = float(value)
+
+
+def safe_metric_value(value: float) -> str:
+    return f"{value:.12g}" if math.isfinite(value) else ""
+
+
+def write_dependency_metrics(
+    path: Path,
+    rows: list[dict[str, str]],
+) -> Path:
+    fieldnames = ["category", "metric", "series", "feature", "lag", "value", "n"]
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def plot_dependency_acf(output_dir: Path, target: str, acf_target: list[tuple[int, float, int]], acf_residual: list[tuple[int, float, int]]) -> Path:
+    path = output_dir / "dependency_acf.png"
+    lags = [lag for lag, _value, _pairs in acf_target]
+    target_values = [value for _lag, value, _pairs in acf_target]
+    residual_values = [value for _lag, value, _pairs in acf_residual]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.axhline(0.0, color="black", linewidth=0.8)
+    ax.plot(lags, target_values, marker="o", linewidth=1.5, label=target)
+    ax.plot(lags, residual_values, marker="s", linewidth=1.5, label="residuo_linear")
+    ax.set_title(f"Autocorrelacao por lag - {target}")
+    ax.set_xlabel("Lag")
+    ax.set_ylabel("ACF")
+    ax.legend()
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_dependency_lag_mi(output_dir: Path, target: str, mi_target: list[tuple[int, float, int]], mi_residual: list[tuple[int, float, int]]) -> Path:
+    path = output_dir / "dependency_lag_mi.png"
+    lags = [lag for lag, _value, _pairs in mi_target]
+    target_values = [value for _lag, value, _pairs in mi_target]
+    residual_values = [value for _lag, value, _pairs in mi_residual]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(lags, target_values, marker="o", linewidth=1.5, label=target)
+    ax.plot(lags, residual_values, marker="s", linewidth=1.5, label="residuo_linear")
+    ax.set_title(f"Informacao mutua normalizada por lag - {target}")
+    ax.set_xlabel("Lag")
+    ax.set_ylabel("NMI")
+    ax.legend()
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_dependency_pressure(
+    output_dir: Path,
+    target: str,
+    pressure_rows: list[dict[str, str]],
+) -> Path:
+    path = output_dir / "dependency_pressure_features.png"
+    rows = [row for row in pressure_rows if row["metric"] in {"spearman", "normalized_mutual_information"} and row["value"] != ""]
+    features = list(dict.fromkeys(row["feature"] for row in rows))
+    spearman_values = [float(next((row["value"] for row in rows if row["feature"] == feature and row["metric"] == "spearman"), "nan")) for feature in features]
+    mi_values = [float(next((row["value"] for row in rows if row["feature"] == feature and row["metric"] == "normalized_mutual_information"), "nan")) for feature in features]
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = np.arange(len(features))
+    width = 0.38
+    ax.bar(x - width / 2, spearman_values, width=width, label="Spearman", color="#4c78a8")
+    ax.bar(x + width / 2, mi_values, width=width, label="NMI", color="#f58518")
+    ax.axhline(0.0, color="black", linewidth=0.8)
+    ax.set_title(f"Dependencia com pressao GPU - {target}")
+    ax.set_ylabel("Valor")
+    ax.set_xticks(x)
+    ax.set_xticklabels(features, rotation=30, ha="right")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_dependency_feature_heatmap(
+    output_dir: Path,
+    target: str,
+    feature_rows: list[dict[str, str]],
+) -> Path:
+    path = output_dir / "dependency_feature_spearman.png"
+    pairs = [
+        (row["feature"], float(row["value"]))
+        for row in feature_rows
+        if row["metric"] == "spearman" and row["value"] != ""
+    ]
+    pairs.sort(key=lambda item: abs(item[1]), reverse=True)
+    pairs = pairs[:20]
+    if not pairs:
+        pairs = [("sem_dados", 0.0)]
+    labels = [name for name, _value in pairs]
+    values = np.asarray([[value for _name, value in pairs]], dtype=float)
+    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 0.55), 2.6))
+    image = ax.imshow(values, aspect="auto", cmap="coolwarm", vmin=-1.0, vmax=1.0)
+    ax.set_title(f"Spearman feature x {target}")
+    ax.set_yticks([0])
+    ax.set_yticklabels([target])
+    ax.set_xticks(np.arange(len(labels)))
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    for index, value in enumerate(values[0]):
+        ax.text(index, 0, f"{value:.2f}", ha="center", va="center", fontsize=8)
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_dependency_rolling(output_dir: Path, target: str, observations: list[dict[str, float | str]]) -> Path:
+    path = output_dir / "dependency_rolling_windows.png"
+    ordered = sorted(
+        observations,
+        key=lambda row: (str(row.get("run_id", "")), finite_float(row.get("order_ns"), math.inf), str(row.get("source_file", "")), finite_float(row.get("row_index"), 0.0)),
+    )
+    n_rows = len(ordered)
+    if n_rows == 0:
+        return path
+    window_count = max(1, min(160, n_rows // 20 if n_rows >= 20 else n_rows))
+    chunks = np.array_split(np.arange(n_rows), window_count)
+    x_values: list[float] = []
+    mean_values: list[float] = []
+    p95_values: list[float] = []
+    std_values: list[float] = []
+    in_flight_values: list[float] = []
+    pending_values: list[float] = []
+    for chunk in chunks:
+        rows = [ordered[int(index)] for index in chunk]
+        target_values = finite_values(finite_float(row.get("target_value")) for row in rows)
+        if len(target_values) == 0:
+            continue
+        x_values.append(float(chunk.mean()))
+        mean_values.append(float(np.mean(target_values)))
+        p95_values.append(float(np.percentile(target_values, 95)))
+        std_values.append(float(np.std(target_values)))
+        in_flight = finite_values(finite_float(row.get("in_flight_kernels_at_launch")) for row in rows)
+        pending = finite_values(finite_float(row.get("pending_kernels_at_launch")) for row in rows)
+        in_flight_values.append(float(np.mean(in_flight)) if len(in_flight) else math.nan)
+        pending_values.append(float(np.mean(pending)) if len(pending) else math.nan)
+
+    fig, (ax_top, ax_bottom) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    ax_top.plot(x_values, mean_values, linewidth=1.6, label="media", color="#4c78a8")
+    ax_top.plot(x_values, p95_values, linewidth=1.4, label="p95", color="#e45756")
+    ax_top.fill_between(x_values, mean_values, p95_values, color="#e45756", alpha=0.12)
+    ax_top.set_title(f"Janelas temporais - {target}")
+    ax_top.set_ylabel(target)
+    ax_top.legend()
+    ax_top.grid(True, alpha=0.25)
+
+    ax_bottom.plot(x_values, std_values, linewidth=1.4, label="std_target", color="#72b7b2")
+    ax_bottom.plot(x_values, in_flight_values, linewidth=1.4, label="in_flight_medio", color="#54a24b")
+    ax_bottom.plot(x_values, pending_values, linewidth=1.4, label="pending_medio", color="#f58518")
+    ax_bottom.set_xlabel("Ordem temporal agrupada")
+    ax_bottom.set_ylabel("Valor por janela")
+    ax_bottom.legend()
+    ax_bottom.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def save_dependency_analysis(
+    paths: list[Path],
+    target: str,
+    output_dir: Path,
+    max_rows: int,
+) -> dict[str, str]:
+    observations, original_rows = load_dependency_observations(paths, target, max_rows)
+    metrics_path = output_dir / "dependency_metrics.csv"
+    if len(observations) < 3:
+        write_dependency_metrics(
+            metrics_path,
+            [{
+                "category": "summary",
+                "metric": "rows_used",
+                "series": target,
+                "feature": "",
+                "lag": "",
+                "value": str(len(observations)),
+                "n": str(original_rows),
+            }],
+        )
+        return {
+            "dependency_metrics_csv": str(metrics_path),
+            "dependency_acf_plot": "",
+            "dependency_lag_mi_plot": "",
+            "dependency_pressure_plot": "",
+            "dependency_rolling_plot": "",
+            "dependency_feature_heatmap": "",
+            "dependency_dw_target": "",
+            "dependency_dw_residual": "",
+            "dependency_ess_ratio_target": "",
+            "dependency_ess_ratio_residual": "",
+            "dependency_max_abs_acf10_target": "",
+            "dependency_max_abs_acf10_residual": "",
+        }
+
+    groups = group_observations(observations)
+    max_lag = max(1, min(DEPENDENCE_MAX_LAG, min((len(group) for group in groups.values()), default=2) - 1))
+    acf_target = grouped_acf(groups, "target_value", max_lag)
+    acf_residual = grouped_acf(groups, "target_residual", max_lag)
+    mi_target = grouped_lag_mi(groups, "target_value", max_lag)
+    mi_residual = grouped_lag_mi(groups, "target_residual", max_lag)
+    dw_target = durbin_watson_grouped(groups, "target_value")
+    dw_residual = durbin_watson_grouped(groups, "target_residual")
+    ess_target = effective_sample_size(len(observations), acf_target)
+    ess_residual = effective_sample_size(len(observations), acf_residual)
+    ess_ratio_target = ess_target / len(observations) if len(observations) else math.nan
+    ess_ratio_residual = ess_residual / len(observations) if len(observations) else math.nan
+    max_abs_acf10_target = max((abs(value) for lag, value, _pairs in acf_target if lag <= 10 and math.isfinite(value)), default=math.nan)
+    max_abs_acf10_residual = max((abs(value) for lag, value, _pairs in acf_residual if lag <= 10 and math.isfinite(value)), default=math.nan)
+
+    metric_rows: list[dict[str, str]] = []
+
+    def add_metric(category: str, metric: str, value: float, series: str = "", feature: str = "", lag: str = "", n: int | str = "") -> None:
+        metric_rows.append({
+            "category": category,
+            "metric": metric,
+            "series": series,
+            "feature": feature,
+            "lag": lag,
+            "value": safe_metric_value(value),
+            "n": str(n),
+        })
+
+    add_metric("summary", "rows_loaded", float(original_rows), target, n=original_rows)
+    add_metric("summary", "rows_used", float(len(observations)), target, n=len(observations))
+    add_metric("summary", "durbin_watson", dw_target, target, n=len(observations))
+    add_metric("summary", "durbin_watson", dw_residual, "residuo_linear", n=len(observations))
+    add_metric("summary", "effective_sample_size", ess_target, target, n=len(observations))
+    add_metric("summary", "effective_sample_size", ess_residual, "residuo_linear", n=len(observations))
+    add_metric("summary", "effective_sample_size_ratio", ess_ratio_target, target, n=len(observations))
+    add_metric("summary", "effective_sample_size_ratio", ess_ratio_residual, "residuo_linear", n=len(observations))
+    add_metric("summary", "max_abs_acf_lag_1_10", max_abs_acf10_target, target, n=len(observations))
+    add_metric("summary", "max_abs_acf_lag_1_10", max_abs_acf10_residual, "residuo_linear", n=len(observations))
+
+    for series_name, rows in ((target, acf_target), ("residuo_linear", acf_residual)):
+        for lag, value, pairs in rows:
+            add_metric("temporal", "acf", value, series_name, lag=str(lag), n=pairs)
+    for series_name, rows in ((target, mi_target), ("residuo_linear", mi_residual)):
+        for lag, value, pairs in rows:
+            add_metric("temporal", "normalized_mutual_information", value, series_name, lag=str(lag), n=pairs)
+
+    pressure_rows: list[dict[str, str]] = []
+    feature_rows: list[dict[str, str]] = []
+    target_values = [finite_float(row.get("target_value")) for row in observations]
+    for feature in DEPENDENCE_PRESSURE_FEATURES:
+        values = [finite_float(row.get(feature)) for row in observations]
+        spearman = spearman_corr(values, target_values)
+        nmi = normalized_mutual_information(values, target_values)
+        row_s = {
+            "category": "pressure",
+            "metric": "spearman",
+            "series": target,
+            "feature": feature,
+            "lag": "",
+            "value": safe_metric_value(spearman),
+            "n": str(len(observations)),
+        }
+        row_mi = {
+            "category": "pressure",
+            "metric": "normalized_mutual_information",
+            "series": target,
+            "feature": feature,
+            "lag": "",
+            "value": safe_metric_value(nmi),
+            "n": str(len(observations)),
+        }
+        pressure_rows.extend([row_s, row_mi])
+        metric_rows.extend([row_s, row_mi])
+
+    for feature in DEPENDENCE_HEATMAP_FEATURES:
+        values = [finite_float(row.get(feature)) for row in observations]
+        spearman = spearman_corr(values, target_values)
+        row = {
+            "category": "feature_target",
+            "metric": "spearman",
+            "series": target,
+            "feature": feature,
+            "lag": "",
+            "value": safe_metric_value(spearman),
+            "n": str(len(observations)),
+        }
+        feature_rows.append(row)
+        metric_rows.append(row)
+
+    write_dependency_metrics(metrics_path, metric_rows)
+    acf_path = plot_dependency_acf(output_dir, target, acf_target, acf_residual)
+    lag_mi_path = plot_dependency_lag_mi(output_dir, target, mi_target, mi_residual)
+    pressure_path = plot_dependency_pressure(output_dir, target, pressure_rows)
+    rolling_path = plot_dependency_rolling(output_dir, target, observations)
+    heatmap_path = plot_dependency_feature_heatmap(output_dir, target, feature_rows)
+
+    return {
+        "dependency_metrics_csv": str(metrics_path),
+        "dependency_acf_plot": str(acf_path),
+        "dependency_lag_mi_plot": str(lag_mi_path),
+        "dependency_pressure_plot": str(pressure_path),
+        "dependency_rolling_plot": str(rolling_path),
+        "dependency_feature_heatmap": str(heatmap_path),
+        "dependency_dw_target": safe_metric_value(dw_target),
+        "dependency_dw_residual": safe_metric_value(dw_residual),
+        "dependency_ess_ratio_target": safe_metric_value(ess_ratio_target),
+        "dependency_ess_ratio_residual": safe_metric_value(ess_ratio_residual),
+        "dependency_max_abs_acf10_target": safe_metric_value(max_abs_acf10_target),
+        "dependency_max_abs_acf10_residual": safe_metric_value(max_abs_acf10_residual),
+    }
+
+
 def train_and_plot(
     paths: list[Path], target: str, output_dir: Path, max_rows: int, test_fraction: float,
     seed: int, knn_k: int, knn_train_limit: int, cv_folds: int = 5,
@@ -973,6 +1599,7 @@ def train_and_plot(
 
     metrics_path = save_metrics_csv(output_dir, results)
     plot_paths = [plot_metric(output_dir, results, metric) for metric in ("MAE", "RMSE", "R2")]
+    dependency_paths = save_dependency_analysis(paths, target, output_dir, max_rows)
     best = min(results, key=lambda row: float(row["RMSE"]))
 
     models_info_path = models_dir / "models_info.txt"
@@ -1001,6 +1628,7 @@ def train_and_plot(
         "rmse_plot": str(plot_paths[1]),
         "r2_plot": str(plot_paths[2]),
         "models_dir": str(models_dir),
+        **dependency_paths,
     }
 
 
@@ -1026,7 +1654,14 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
 
     summary_path = args.analysis_dir / "training_summary.csv"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["label", "target", "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "best_model", "best_mae", "best_rmse", "best_r2", "metrics_csv", "mae_plot", "rmse_plot", "r2_plot", "models_dir"]
+    fieldnames = [
+        "label", "target", "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows",
+        "best_model", "best_mae", "best_rmse", "best_r2", "metrics_csv", "mae_plot", "rmse_plot",
+        "r2_plot", "models_dir", "dependency_metrics_csv", "dependency_acf_plot", "dependency_lag_mi_plot",
+        "dependency_pressure_plot", "dependency_rolling_plot", "dependency_feature_heatmap",
+        "dependency_dw_target", "dependency_dw_residual", "dependency_ess_ratio_target",
+        "dependency_ess_ratio_residual", "dependency_max_abs_acf10_target", "dependency_max_abs_acf10_residual",
+    ]
     with summary_path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -1047,7 +1682,15 @@ def mode_compare(args: argparse.Namespace) -> int:
     print(f"target: {args.target}")
     print(f"cv_folds: {args.cv_folds}")
     print(f"optimize_hyperparams: {args.optimize_hyperparams}")
-    for key in ("source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "metrics_csv", "mae_plot", "rmse_plot", "r2_plot", "models_dir", "best_model", "best_rmse", "best_r2"):
+    for key in (
+        "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "metrics_csv",
+        "mae_plot", "rmse_plot", "r2_plot", "models_dir", "dependency_metrics_csv",
+        "dependency_acf_plot", "dependency_lag_mi_plot", "dependency_pressure_plot",
+        "dependency_rolling_plot", "dependency_feature_heatmap", "dependency_dw_target",
+        "dependency_dw_residual", "dependency_ess_ratio_target", "dependency_ess_ratio_residual",
+        "dependency_max_abs_acf10_target", "dependency_max_abs_acf10_residual", "best_model",
+        "best_rmse", "best_r2",
+    ):
         print(f"{key}: {result[key]}")
     return 0
 

@@ -13,7 +13,7 @@ xgboost>=1.7.0
 catboost>=1.1.0
 
 # Tabular Foundation Model (Pretrained)
-tab-pfn>=0.1.0
+tabpfn>=0.1.0
 
 # Optional: Data Analysis
 seaborn>=0.12.0
