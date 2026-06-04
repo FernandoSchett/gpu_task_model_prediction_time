@@ -161,6 +161,7 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
     compare_parser.add_argument("--optimize-hyperparams", action="store_true", help="Use Optuna to optimize hyperparameters.")
     compare_parser.add_argument("--optuna-trials", type=int, default=20, help="Number of Optuna trials for hyperparameter optimization.")
+    compare_parser.add_argument("--dependency-only", "--skip-training", action="store_true", help="Generate dependency/independence CSVs and plots without training models.")
     compare_parser.add_argument("--enable-tabpfn", action="store_true", help="Train TabPFN. Disabled by default because large CPU datasets are too slow.")
     compare_parser.add_argument("--tabpfn-device", choices=("auto", "cpu", "cuda"), default="auto", help="Device used by TabPFN. auto uses CUDA when available, otherwise CPU.")
     compare_parser.add_argument("--tabpfn-train-limit", type=int, default=1000, help="Maximum CPU rows used by TabPFN when --enable-tabpfn is set. Ignored on CUDA.")
@@ -926,15 +927,60 @@ def save_metrics_csv(output_dir: Path, rows: list[dict[str, float | str]]) -> Pa
     return path
 
 
-def save_model(model, model_dir: Path, model_name: str) -> Path:
+def model_path(model_dir: Path, model_name: str) -> Path:
+    return model_dir / f"{model_name}.pkl"
+
+
+def model_metadata_path(model_dir: Path, model_name: str) -> Path:
+    return model_dir / f"{model_name}.meta.json"
+
+
+def save_model(model, model_dir: Path, model_name: str, metadata: dict[str, object] | None = None) -> Path:
     """Save trained model to disk using pickle or keras."""
-    model_path = model_dir / f"{model_name}.pkl"
+    path = model_path(model_dir, model_name)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
     try:
-        with model_path.open("wb") as f:
+        with tmp_path.open("wb") as f:
             pickle.dump(model, f)
+        tmp_path.replace(path)
+        if metadata is not None:
+            metadata_path = model_metadata_path(model_dir, model_name)
+            metadata_tmp_path = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+            metadata_tmp_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            metadata_tmp_path.replace(metadata_path)
     except Exception as e:
         print(f"Warning: Could not save {model_name}: {e}")
-    return model_path
+    return path
+
+
+def load_saved_model(model_dir: Path, model_name: str, expected_signature: dict[str, object]) -> object | None:
+    path = model_path(model_dir, model_name)
+    metadata_path = model_metadata_path(model_dir, model_name)
+    if not path.exists() or not metadata_path.exists():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"Warning: Could not read metadata for {model_name}: {e}")
+        return None
+    if metadata.get("signature") != expected_signature:
+        return None
+    try:
+        with path.open("rb") as file:
+            return pickle.load(file)
+    except Exception as e:
+        print(f"Warning: Could not load {model_name}; retraining. Error: {e}")
+        return None
+
+
+def predict_model(model, x: np.ndarray, feature_names: list[str] | None = None) -> np.ndarray:
+    model_input = feature_frame(x, feature_names)
+    try:
+        return model.predict(model_input)
+    except Exception:
+        if model_input is x:
+            raise
+        return model.predict(x)
 
 
 def plot_metric(output_dir: Path, rows: list[dict[str, float | str]], metric: str) -> Path:
@@ -1410,15 +1456,26 @@ def save_dependency_analysis(
     if len(observations) < 3:
         write_dependency_metrics(
             metrics_path,
-            [{
-                "category": "summary",
-                "metric": "rows_used",
-                "series": target,
-                "feature": "",
-                "lag": "",
-                "value": str(len(observations)),
-                "n": str(original_rows),
-            }],
+            [
+                {
+                    "category": "summary",
+                    "metric": "rows_loaded",
+                    "series": target,
+                    "feature": "",
+                    "lag": "",
+                    "value": str(original_rows),
+                    "n": str(original_rows),
+                },
+                {
+                    "category": "summary",
+                    "metric": "rows_used",
+                    "series": target,
+                    "feature": "",
+                    "lag": "",
+                    "value": str(len(observations)),
+                    "n": str(original_rows),
+                },
+            ],
         )
         return {
             "dependency_metrics_csv": str(metrics_path),
@@ -1547,6 +1604,48 @@ def save_dependency_analysis(
     }
 
 
+def dependency_summary_counts(metrics_csv: str) -> tuple[str, str]:
+    rows_loaded = ""
+    rows_used = ""
+    try:
+        with Path(metrics_csv).open("r", encoding="utf-8", newline="") as file:
+            for row in csv.DictReader(file):
+                if row.get("category") != "summary":
+                    continue
+                if row.get("metric") == "rows_loaded":
+                    rows_loaded = row.get("value", "")
+                elif row.get("metric") == "rows_used":
+                    rows_used = row.get("value", "")
+    except FileNotFoundError:
+        pass
+    return rows_loaded, rows_used
+
+
+def dependency_only_result(paths: list[Path], target: str, output_dir: Path, max_rows: int) -> dict[str, str]:
+    if not paths:
+        raise SystemExit("Nenhum CSV de resultados encontrado.")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dependency_paths = save_dependency_analysis(paths, target, output_dir, max_rows)
+    rows_loaded, rows_used = dependency_summary_counts(dependency_paths["dependency_metrics_csv"])
+    return {
+        "source_files": str(len(paths)),
+        "rows_loaded": rows_loaded,
+        "rows_used": rows_used,
+        "train_rows": "",
+        "test_rows": "",
+        "best_model": "",
+        "best_mae": "",
+        "best_rmse": "",
+        "best_r2": "",
+        "metrics_csv": "",
+        "mae_plot": "",
+        "rmse_plot": "",
+        "r2_plot": "",
+        "models_dir": "",
+        **dependency_paths,
+    }
+
+
 def train_and_plot(
     paths: list[Path], target: str, output_dir: Path, max_rows: int, test_fraction: float,
     seed: int, knn_k: int, knn_train_limit: int, cv_folds: int = 5,
@@ -1569,62 +1668,156 @@ def train_and_plot(
     train_x, test_x, train_y, test_y = train_test_split(x, y, test_fraction, seed)
     train_x_std, test_x_std, mean, scale = standardize(train_x, test_x)
 
+    resolved_tabpfn_device = resolve_tabpfn_device(tabpfn_device) if enable_tabpfn and TABPFN_AVAILABLE else tabpfn_device
+    model_signature: dict[str, object] = {
+        "target": target,
+        "seed": seed,
+        "max_rows": max_rows,
+        "test_fraction": test_fraction,
+        "cv_folds": cv_folds,
+        "optimize_hyperparams": optimize_hyperparams,
+        "optuna_trials": optuna_trials,
+        "knn_k": knn_k,
+        "knn_train_limit": knn_train_limit,
+        "enable_tabpfn": enable_tabpfn,
+        "tabpfn_train_limit": tabpfn_train_limit,
+        "tabpfn_device": tabpfn_device,
+        "resolved_tabpfn_device": resolved_tabpfn_device,
+        "source_files": [str(path) for path in paths],
+        "rows_loaded": original_rows,
+        "rows_used": len(y),
+        "train_rows": len(train_y),
+        "test_rows": len(test_y),
+        "features": feature_names,
+    }
+    save_preprocessing(models_dir, feature_names, mean, scale)
+    (models_dir / "training_signature.json").write_text(
+        json.dumps(model_signature, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
     results: list[dict[str, float | str]] = []
-    trained_models: dict[str, object] = {}
+    saved_model_paths: list[Path] = []
+    resumed_model_names: list[str] = []
+    trained_model_names: list[str] = []
 
-    lr_model = fit_linear(train_x_std, train_y)
-    trained_models["linear_regression"] = lr_model
-    results.append({"model": "Linear Regression", **metrics(test_y, predict_linear(lr_model, test_x_std))})
+    def fit_or_resume(
+        model_name: str,
+        train_fn,
+        predict_x: np.ndarray,
+        predict_feature_names: list[str] | None = None,
+    ) -> tuple[object | None, np.ndarray | None]:
+        model = load_saved_model(models_dir, model_name, model_signature)
+        if model is not None:
+            try:
+                prediction = predict_model(model, predict_x, predict_feature_names)
+                print(f"Resume: loaded {model_name}")
+                saved_model_paths.append(model_path(models_dir, model_name))
+                resumed_model_names.append(model_name)
+                return model, prediction
+            except Exception as e:
+                print(f"Warning: Could not predict with saved {model_name}; retraining. Error: {e}")
+        model, prediction = train_fn()
+        if model is not None and prediction is not None:
+            metadata = {"model_name": model_name, "signature": model_signature}
+            path = save_model(model, models_dir, model_name, metadata)
+            saved_model_paths.append(path)
+            trained_model_names.append(model_name)
+        return model, prediction
 
-    ridge_model = fit_ridge(train_x_std, train_y, alpha=1.0)
-    trained_models["ridge_regression"] = ridge_model
-    results.append({"model": "Ridge Regression", **metrics(test_y, predict_linear(ridge_model, test_x_std))})
+    def add_result(display_name: str, prediction: np.ndarray | None) -> None:
+        if prediction is not None:
+            results.append({"model": display_name, **metrics(test_y, prediction)})
+
+    lr_model, lr_pred = fit_or_resume(
+        "linear_regression",
+        lambda: (lambda model: (model, predict_linear(model, test_x_std)))(fit_linear(train_x_std, train_y)),
+        test_x_std,
+    )
+    add_result("Linear Regression", lr_pred)
+
+    ridge_model, ridge_pred = fit_or_resume(
+        "ridge_regression",
+        lambda: (lambda model: (model, predict_linear(model, test_x_std)))(fit_ridge(train_x_std, train_y, alpha=1.0)),
+        test_x_std,
+    )
+    add_result("Ridge Regression", ridge_pred)
 
     train_quad = quadratic_features(train_x_std)
     test_quad = quadratic_features(test_x_std)
-    poly_model = fit_ridge(train_quad, train_y, alpha=1.0)
-    trained_models["polynomial_ridge"] = poly_model
-    results.append({"model": "Polynomial Ridge", **metrics(test_y, predict_linear(poly_model, test_quad))})
+    poly_model, poly_pred = fit_or_resume(
+        "polynomial_ridge",
+        lambda: (lambda model: (model, predict_linear(model, test_quad)))(fit_ridge(train_quad, train_y, alpha=1.0)),
+        test_quad,
+    )
+    add_result("Polynomial Ridge", poly_pred)
 
-    if optimize_hyperparams:
-        tree_params = optimize_tree_params(train_x, train_y, cv_folds, seed, optuna_trials)
-        tree_model = DecisionTreeRegressor(**tree_params, random_state=seed)
-    else:
-        tree_model = DecisionTreeRegressor(max_depth=10, min_samples_leaf=100, random_state=seed)
-    tree_model.fit(train_x, train_y)
-    trained_models["decision_tree"] = tree_model
-    results.append({"model": "Decision Tree", **metrics(test_y, tree_model.predict(test_x))})
+    def train_decision_tree():
+        if optimize_hyperparams:
+            tree_params = optimize_tree_params(train_x, train_y, cv_folds, seed, optuna_trials)
+            model = DecisionTreeRegressor(**tree_params, random_state=seed)
+        else:
+            model = DecisionTreeRegressor(max_depth=10, min_samples_leaf=100, random_state=seed)
+        model.fit(train_x, train_y)
+        return model, model.predict(test_x)
 
-    if optimize_hyperparams:
-        forest_params = optimize_forest_params(train_x, train_y, cv_folds, seed, optuna_trials)
-        forest_model = RandomForestRegressor(**forest_params, random_state=seed, n_jobs=-1)
-    else:
-        forest_model = RandomForestRegressor(n_estimators=100, max_depth=10, min_samples_leaf=100, random_state=seed, n_jobs=-1)
-    forest_model.fit(train_x, train_y)
-    trained_models["random_forest"] = forest_model
-    results.append({"model": "Random Forest", **metrics(test_y, forest_model.predict(test_x))})
+    tree_model, tree_pred = fit_or_resume("decision_tree", train_decision_tree, test_x)
+    add_result("Decision Tree", tree_pred)
 
-    if optimize_hyperparams:
-        boosting_params = optimize_boosting_params(train_x, train_y, cv_folds, seed, optuna_trials)
-        boosting_model = GradientBoostingRegressor(**boosting_params, random_state=seed)
-    else:
-        boosting_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=seed)
-    boosting_model.fit(train_x, train_y)
-    trained_models["gradient_boosting"] = boosting_model
-    results.append({"model": "Gradient Boosting", **metrics(test_y, boosting_model.predict(test_x))})
+    def train_random_forest():
+        if optimize_hyperparams:
+            forest_params = optimize_forest_params(train_x, train_y, cv_folds, seed, optuna_trials)
+            model = RandomForestRegressor(**forest_params, random_state=seed, n_jobs=-1)
+        else:
+            model = RandomForestRegressor(n_estimators=100, max_depth=10, min_samples_leaf=100, random_state=seed, n_jobs=-1)
+        model.fit(train_x, train_y)
+        return model, model.predict(test_x)
 
-    knn_params = optimize_knn_params(train_x_std, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-    knn_model, knn_pred = train_knn(train_x_std, train_y, test_x_std, knn_k, knn_train_limit, knn_params)
-    trained_models["knn_regression"] = knn_model
-    results.append({"model": "kNN Regression", **metrics(test_y, knn_pred)})
+    forest_model, forest_pred = fit_or_resume("random_forest", train_random_forest, test_x)
+    add_result("Random Forest", forest_pred)
+
+    def train_gradient_boosting():
+        if optimize_hyperparams:
+            boosting_params = optimize_boosting_params(train_x, train_y, cv_folds, seed, optuna_trials)
+            model = GradientBoostingRegressor(**boosting_params, random_state=seed)
+        else:
+            model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=seed)
+        model.fit(train_x, train_y)
+        return model, model.predict(test_x)
+
+    boosting_model, boosting_pred = fit_or_resume("gradient_boosting", train_gradient_boosting, test_x)
+    add_result("Gradient Boosting", boosting_pred)
+
+    knn_model, knn_pred = fit_or_resume(
+        "knn_regression",
+        lambda: train_knn(
+            train_x_std,
+            train_y,
+            test_x_std,
+            knn_k,
+            knn_train_limit,
+            optimize_knn_params(train_x_std, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None,
+        ),
+        test_x_std,
+    )
+    add_result("kNN Regression", knn_pred)
 
     if LIGHTGBM_AVAILABLE:
         try:
-            lgb_params = optimize_lightgbm_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-            lgb_model, lgb_pred = train_lightgbm(train_x, train_y, test_x, seed, params=lgb_params, feature_names=feature_names)
-            if lgb_model is not None and lgb_pred is not None:
-                trained_models["lightgbm"] = lgb_model
-                results.append({"model": "LightGBM", **metrics(test_y, lgb_pred)})
+            lgb_model, lgb_pred = fit_or_resume(
+                "lightgbm",
+                lambda: train_lightgbm(
+                    train_x,
+                    train_y,
+                    test_x,
+                    seed,
+                    params=optimize_lightgbm_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None,
+                    feature_names=feature_names,
+                ),
+                test_x,
+                feature_names,
+            )
+            add_result("LightGBM", lgb_pred)
         except Exception as e:
             print(f"Warning: LightGBM training failed: {e}")
     else:
@@ -1632,11 +1825,20 @@ def train_and_plot(
 
     if XGBOOST_AVAILABLE:
         try:
-            xgb_params = optimize_xgboost_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-            xgb_model, xgb_pred = train_xgboost(train_x, train_y, test_x, seed, params=xgb_params, feature_names=feature_names)
-            if xgb_model is not None and xgb_pred is not None:
-                trained_models["xgboost"] = xgb_model
-                results.append({"model": "XGBoost", **metrics(test_y, xgb_pred)})
+            xgb_model, xgb_pred = fit_or_resume(
+                "xgboost",
+                lambda: train_xgboost(
+                    train_x,
+                    train_y,
+                    test_x,
+                    seed,
+                    params=optimize_xgboost_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None,
+                    feature_names=feature_names,
+                ),
+                test_x,
+                feature_names,
+            )
+            add_result("XGBoost", xgb_pred)
         except Exception as e:
             print(f"Warning: XGBoost training failed: {e}")
     else:
@@ -1644,11 +1846,20 @@ def train_and_plot(
 
     if CATBOOST_AVAILABLE:
         try:
-            cb_params = optimize_catboost_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-            cb_model, cb_pred = train_catboost(train_x, train_y, test_x, seed, params=cb_params, feature_names=feature_names)
-            if cb_model is not None and cb_pred is not None:
-                trained_models["catboost"] = cb_model
-                results.append({"model": "CatBoost", **metrics(test_y, cb_pred)})
+            cb_model, cb_pred = fit_or_resume(
+                "catboost",
+                lambda: train_catboost(
+                    train_x,
+                    train_y,
+                    test_x,
+                    seed,
+                    params=optimize_catboost_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None,
+                    feature_names=feature_names,
+                ),
+                test_x,
+                feature_names,
+            )
+            add_result("CatBoost", cb_pred)
         except Exception as e:
             print(f"Warning: CatBoost training failed: {e}")
     else:
@@ -1659,54 +1870,64 @@ def train_and_plot(
         q_params = optimize_lightgbm_params(train_x, train_y, cv_folds, seed, optuna_trials, objective="quantile") if optimize_hyperparams else None
         for q in [0.90, 0.95, 0.99]:
             try:
-                q_model, q_pred = train_lightgbm_quantile(train_x, train_y, test_x, q, seed, params=q_params, feature_names=feature_names)
-                if q_model is not None and q_pred is not None:
-                    trained_models[f"lightgbm_quantile_p{int(q * 100)}"] = q_model
+                model_name = f"lightgbm_quantile_p{int(q * 100)}"
+                q_model, q_pred = fit_or_resume(
+                    model_name,
+                    lambda q=q: train_lightgbm_quantile(train_x, train_y, test_x, q, seed, params=q_params, feature_names=feature_names),
+                    test_x,
+                    feature_names,
+                )
+                if q_pred is not None:
                     quantile_preds.append(q_pred)
             except Exception as e:
                 print(f"Warning: LightGBM Quantile {q} training failed: {e}")
         if quantile_preds:
             lgb_q_pred = np.mean(quantile_preds, axis=0)
-            results.append({"model": "LightGBM Quantile (p90/p95/p99)", **metrics(test_y, lgb_q_pred)})
+            add_result("LightGBM Quantile (p90/p95/p99)", lgb_q_pred)
 
     if XGBOOST_AVAILABLE:
         quantile_preds = []
         q_params = optimize_xgboost_params(train_x, train_y, cv_folds, seed, optuna_trials, objective="reg:quantileerror") if optimize_hyperparams else None
         for q in [0.90, 0.95, 0.99]:
             try:
-                q_model, q_pred = train_xgboost_quantile(train_x, train_y, test_x, q, seed, params=q_params, feature_names=feature_names)
-                if q_model is not None and q_pred is not None:
-                    trained_models[f"xgboost_quantile_p{int(q * 100)}"] = q_model
+                model_name = f"xgboost_quantile_p{int(q * 100)}"
+                q_model, q_pred = fit_or_resume(
+                    model_name,
+                    lambda q=q: train_xgboost_quantile(train_x, train_y, test_x, q, seed, params=q_params, feature_names=feature_names),
+                    test_x,
+                    feature_names,
+                )
+                if q_pred is not None:
                     quantile_preds.append(q_pred)
             except Exception as e:
                 print(f"Warning: XGBoost Quantile {q} training failed: {e}")
         if quantile_preds:
             xgb_q_pred = np.mean(quantile_preds, axis=0)
-            results.append({"model": "XGBoost Quantile (p90/p95/p99)", **metrics(test_y, xgb_q_pred)})
+            add_result("XGBoost Quantile (p90/p95/p99)", xgb_q_pred)
 
     if enable_tabpfn and TABPFN_AVAILABLE:
         try:
             pfn_params = optimize_tabpfn_params(seed, optuna_trials) if optimize_hyperparams else None
-            pfn_model, pfn_pred = train_tabpfn(
-                train_x,
-                train_y,
+            pfn_model, pfn_pred = fit_or_resume(
+                "tabpfn",
+                lambda: train_tabpfn(
+                    train_x,
+                    train_y,
+                    test_x,
+                    seed,
+                    params=pfn_params,
+                    train_limit=tabpfn_train_limit,
+                    requested_device=tabpfn_device,
+                ),
                 test_x,
-                seed,
-                params=pfn_params,
-                train_limit=tabpfn_train_limit,
-                requested_device=tabpfn_device,
             )
-            if pfn_model is not None and pfn_pred is not None:
-                trained_models["tabpfn"] = pfn_model
-                results.append({"model": "TabPFN", **metrics(test_y, pfn_pred)})
+            add_result("TabPFN", pfn_pred)
         except Exception as e:
             print(f"Warning: TabPFN training failed: {e}")
     elif enable_tabpfn:
         print("Warning: TabPFN not available")
 
-    # Save everything only after training/evaluation finishes.
-    save_preprocessing(models_dir, feature_names, mean, scale)
-    saved_model_paths = [save_model(model, models_dir, model_name) for model_name, model in sorted(trained_models.items())]
+    saved_model_paths = sorted(set(saved_model_paths))
 
     metrics_path = save_metrics_csv(output_dir, results)
     plot_paths = [plot_metric(output_dir, results, metric) for metric in ("MAE", "RMSE", "R2")]
@@ -1720,6 +1941,12 @@ def train_and_plot(
         f.write(f"Training set size: {len(train_y)}\n")
         f.write(f"Test set size: {len(test_y)}\n")
         f.write(f"Features: {train_x.shape[1]}\n")
+        f.write(f"Models resumed: {len(resumed_model_names)}\n")
+        for model_name in sorted(resumed_model_names):
+            f.write(f"  - {model_name}\n")
+        f.write(f"Models trained this run: {len(trained_model_names)}\n")
+        for model_name in sorted(trained_model_names):
+            f.write(f"  - {model_name}\n")
         f.write("Models saved:\n")
         for model_file in saved_model_paths:
             f.write(f"  - {model_file.name}\n")
@@ -1755,14 +1982,20 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
     rows: list[dict[str, str]] = []
     for job in jobs:
         paths = result_paths(args.results_dir, args.first_sweep, job["include_regex"])
-        result = train_and_plot(
-            paths, job["target"], Path(job["output_dir"]), args.max_rows, args.test_fraction,
-            args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
-            args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
-        )
+        if args.dependency_only:
+            result = dependency_only_result(paths, job["target"], Path(job["output_dir"]), args.max_rows)
+        else:
+            result = train_and_plot(
+                paths, job["target"], Path(job["output_dir"]), args.max_rows, args.test_fraction,
+                args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
+                args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
+            )
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)
-        print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f} models_dir={result['models_dir']}")
+        if args.dependency_only:
+            print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} dependency_metrics={result['dependency_metrics_csv']}")
+        else:
+            print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f} models_dir={result['models_dir']}")
 
     summary_path = args.analysis_dir / "training_summary.csv"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1787,14 +2020,18 @@ def mode_compare(args: argparse.Namespace) -> int:
         return run_compare_jobs(args, args.jobs_file)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     paths = result_paths(args.results_dir, args.first_sweep, args.include_regex)
-    result = train_and_plot(
-        paths, args.target, args.output_dir, args.max_rows, args.test_fraction,
-        args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
-        args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
-    )
+    if args.dependency_only:
+        result = dependency_only_result(paths, args.target, args.output_dir, args.max_rows)
+    else:
+        result = train_and_plot(
+            paths, args.target, args.output_dir, args.max_rows, args.test_fraction,
+            args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
+            args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
+        )
     print(f"target: {args.target}")
     print(f"cv_folds: {args.cv_folds}")
     print(f"optimize_hyperparams: {args.optimize_hyperparams}")
+    print(f"dependency_only: {args.dependency_only}")
     for key in (
         "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows", "metrics_csv",
         "mae_plot", "rmse_plot", "r2_plot", "models_dir", "dependency_metrics_csv",
