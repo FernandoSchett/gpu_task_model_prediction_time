@@ -162,7 +162,8 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--optimize-hyperparams", action="store_true", help="Use Optuna to optimize hyperparameters.")
     compare_parser.add_argument("--optuna-trials", type=int, default=20, help="Number of Optuna trials for hyperparameter optimization.")
     compare_parser.add_argument("--enable-tabpfn", action="store_true", help="Train TabPFN. Disabled by default because large CPU datasets are too slow.")
-    compare_parser.add_argument("--tabpfn-train-limit", type=int, default=1000, help="Maximum rows used by TabPFN when --enable-tabpfn is set.")
+    compare_parser.add_argument("--tabpfn-device", choices=("auto", "cpu", "cuda"), default="auto", help="Device used by TabPFN. auto uses CUDA when available, otherwise CPU.")
+    compare_parser.add_argument("--tabpfn-train-limit", type=int, default=1000, help="Maximum CPU rows used by TabPFN when --enable-tabpfn is set. Ignored on CUDA.")
     
     baseline_parser = subparsers.add_parser("baseline", help="Train linear/ridge/quadratic regression models")
     baseline_parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Directory containing experiment result CSVs.")
@@ -783,11 +784,30 @@ def train_catboost(
     return model, model.predict(test_input)
 
 
-def _make_tabpfn(seed: int, n_ensemble: int = 10):
+def tabpfn_cuda_available() -> bool:
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def resolve_tabpfn_device(requested_device: str) -> str:
+    if requested_device == "auto":
+        return "cuda" if tabpfn_cuda_available() else "cpu"
+    return requested_device
+
+
+def _make_tabpfn(seed: int, n_ensemble: int = 10, device: str = "cpu"):
     signature = inspect.signature(TabPFNRegressor)
     kwargs = {}
     if "device" in signature.parameters:
-        kwargs["device"] = "cpu"
+        kwargs["device"] = device
+    elif device == "cuda":
+        print("Warning: TabPFNRegressor has no device parameter; cannot force CUDA for this installed version.")
     if "n_ensemble" in signature.parameters:
         kwargs["n_ensemble"] = n_ensemble
     elif "N_ensemble_configurations" in signature.parameters:
@@ -806,18 +826,25 @@ def train_tabpfn(
     seed: int = 42,
     params: dict | None = None,
     train_limit: int = 1000,
+    requested_device: str = "auto",
 ) -> tuple:
     """Train TabPFN model."""
     if not TABPFN_AVAILABLE:
         return None, None
     try:
         n_ensemble = int((params or {}).get("n_ensemble", 10))
-        if train_limit > 0 and len(train_y) > train_limit:
+        device = resolve_tabpfn_device(requested_device)
+        if device == "cuda" and not tabpfn_cuda_available():
+            print("Warning: TabPFN CUDA requested, but torch.cuda.is_available() is false. Skipping TabPFN.")
+            return None, None
+        effective_train_limit = train_limit if device == "cpu" else 0
+        if effective_train_limit > 0 and len(train_y) > effective_train_limit:
             rng = np.random.default_rng(seed)
-            indices = rng.choice(len(train_y), train_limit, replace=False)
+            indices = rng.choice(len(train_y), effective_train_limit, replace=False)
             train_x = train_x[indices]
             train_y = train_y[indices]
-        model = _make_tabpfn(seed, n_ensemble=n_ensemble)
+        print(f"TabPFN device: {device}; train_rows: {len(train_y)}")
+        model = _make_tabpfn(seed, n_ensemble=n_ensemble, device=device)
         model.fit(train_x, train_y)
         return model, model.predict(test_x)
     except Exception as e:
@@ -1524,7 +1551,7 @@ def train_and_plot(
     paths: list[Path], target: str, output_dir: Path, max_rows: int, test_fraction: float,
     seed: int, knn_k: int, knn_train_limit: int, cv_folds: int = 5,
     optimize_hyperparams: bool = False, optuna_trials: int = 20,
-    enable_tabpfn: bool = False, tabpfn_train_limit: int = 1000,
+    enable_tabpfn: bool = False, tabpfn_train_limit: int = 1000, tabpfn_device: str = "auto",
 ) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     models_dir = output_dir / "trained_models"
@@ -1660,7 +1687,15 @@ def train_and_plot(
     if enable_tabpfn and TABPFN_AVAILABLE:
         try:
             pfn_params = optimize_tabpfn_params(seed, optuna_trials) if optimize_hyperparams else None
-            pfn_model, pfn_pred = train_tabpfn(train_x, train_y, test_x, seed, params=pfn_params, train_limit=tabpfn_train_limit)
+            pfn_model, pfn_pred = train_tabpfn(
+                train_x,
+                train_y,
+                test_x,
+                seed,
+                params=pfn_params,
+                train_limit=tabpfn_train_limit,
+                requested_device=tabpfn_device,
+            )
             if pfn_model is not None and pfn_pred is not None:
                 trained_models["tabpfn"] = pfn_model
                 results.append({"model": "TabPFN", **metrics(test_y, pfn_pred)})
@@ -1723,7 +1758,7 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
         result = train_and_plot(
             paths, job["target"], Path(job["output_dir"]), args.max_rows, args.test_fraction,
             args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
-            args.enable_tabpfn, args.tabpfn_train_limit,
+            args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
         )
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)
@@ -1755,7 +1790,7 @@ def mode_compare(args: argparse.Namespace) -> int:
     result = train_and_plot(
         paths, args.target, args.output_dir, args.max_rows, args.test_fraction,
         args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
-        args.enable_tabpfn, args.tabpfn_train_limit,
+        args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
     )
     print(f"target: {args.target}")
     print(f"cv_folds: {args.cv_folds}")
