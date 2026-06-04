@@ -34,6 +34,12 @@ from sklearn.model_selection import cross_val_score, KFold
 from sklearn.preprocessing import StandardScaler
 
 try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+
+try:
     import lightgbm as lgb
     LIGHTGBM_AVAILABLE = True
 except ImportError:
@@ -155,6 +161,8 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
     compare_parser.add_argument("--optimize-hyperparams", action="store_true", help="Use Optuna to optimize hyperparameters.")
     compare_parser.add_argument("--optuna-trials", type=int, default=20, help="Number of Optuna trials for hyperparameter optimization.")
+    compare_parser.add_argument("--enable-tabpfn", action="store_true", help="Train TabPFN. Disabled by default because large CPU datasets are too slow.")
+    compare_parser.add_argument("--tabpfn-train-limit", type=int, default=1000, help="Maximum rows used by TabPFN when --enable-tabpfn is set.")
     
     baseline_parser = subparsers.add_parser("baseline", help="Train linear/ridge/quadratic regression models")
     baseline_parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Directory containing experiment result CSVs.")
@@ -663,6 +671,12 @@ def quadratic_features(x: np.ndarray) -> np.ndarray:
     return np.column_stack([x, squared])
 
 
+def feature_frame(x: np.ndarray, feature_names: list[str] | None):
+    if not PANDAS_AVAILABLE or feature_names is None:
+        return x
+    return pd.DataFrame(x, columns=feature_names)
+
+
 def train_knn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, k: int, train_limit: int, params: dict | None = None) -> tuple:
     if len(train_y) > train_limit:
         train_x = train_x[:train_limit]
@@ -676,7 +690,15 @@ def train_knn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, k: i
     return model, model.predict(test_x)
 
 
-def train_lightgbm(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42, objective: str = "regression", params: dict | None = None) -> tuple:
+def train_lightgbm(
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    seed: int = 42,
+    objective: str = "regression",
+    params: dict | None = None,
+    feature_names: list[str] | None = None,
+) -> tuple:
     """Train LightGBM model."""
     if not LIGHTGBM_AVAILABLE:
         return None, None
@@ -694,11 +716,21 @@ def train_lightgbm(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray,
         final_params.update(params)
     final_params.update({"objective": objective, "random_state": seed, "n_jobs": -1, "verbose": -1})
     model = lgb.LGBMRegressor(**final_params)
-    model.fit(train_x, train_y)
-    return model, model.predict(test_x)
+    train_input = feature_frame(train_x, feature_names)
+    test_input = feature_frame(test_x, feature_names)
+    model.fit(train_input, train_y)
+    return model, model.predict(test_input)
 
 
-def train_xgboost(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42, objective: str = "reg:squarederror", params: dict | None = None) -> tuple:
+def train_xgboost(
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    seed: int = 42,
+    objective: str = "reg:squarederror",
+    params: dict | None = None,
+    feature_names: list[str] | None = None,
+) -> tuple:
     """Train XGBoost model."""
     if not XGBOOST_AVAILABLE:
         return None, None
@@ -715,11 +747,20 @@ def train_xgboost(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, 
         final_params.update(params)
     final_params.update({"objective": objective, "random_state": seed, "n_jobs": -1, "verbosity": 0})
     model = xgb.XGBRegressor(**final_params)
-    model.fit(train_x, train_y)
-    return model, model.predict(test_x)
+    train_input = feature_frame(train_x, feature_names)
+    test_input = feature_frame(test_x, feature_names)
+    model.fit(train_input, train_y)
+    return model, model.predict(test_input)
 
 
-def train_catboost(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42, params: dict | None = None) -> tuple:
+def train_catboost(
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    seed: int = 42,
+    params: dict | None = None,
+    feature_names: list[str] | None = None,
+) -> tuple:
     """Train CatBoost model."""
     if not CATBOOST_AVAILABLE:
         return None, None
@@ -736,8 +777,10 @@ def train_catboost(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray,
         final_params.update(params)
     final_params.update({"random_state": seed, "verbose": 0, "thread_count": -1, "allow_writing_files": False})
     model = CatBoostRegressor(**final_params)
-    model.fit(train_x, train_y)
-    return model, model.predict(test_x)
+    train_input = feature_frame(train_x, feature_names)
+    test_input = feature_frame(test_x, feature_names)
+    model.fit(train_input, train_y)
+    return model, model.predict(test_input)
 
 
 def _make_tabpfn(seed: int, n_ensemble: int = 10):
@@ -756,12 +799,24 @@ def _make_tabpfn(seed: int, n_ensemble: int = 10):
     return TabPFNRegressor(**kwargs)
 
 
-def train_tabpfn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, seed: int = 42, params: dict | None = None) -> tuple:
+def train_tabpfn(
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    seed: int = 42,
+    params: dict | None = None,
+    train_limit: int = 1000,
+) -> tuple:
     """Train TabPFN model."""
     if not TABPFN_AVAILABLE:
         return None, None
     try:
         n_ensemble = int((params or {}).get("n_ensemble", 10))
+        if train_limit > 0 and len(train_y) > train_limit:
+            rng = np.random.default_rng(seed)
+            indices = rng.choice(len(train_y), train_limit, replace=False)
+            train_x = train_x[indices]
+            train_y = train_y[indices]
         model = _make_tabpfn(seed, n_ensemble=n_ensemble)
         model.fit(train_x, train_y)
         return model, model.predict(test_x)
@@ -770,7 +825,15 @@ def train_tabpfn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, s
         return None, None
 
 
-def train_lightgbm_quantile(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, quantile: float, seed: int = 42, params: dict | None = None) -> tuple:
+def train_lightgbm_quantile(
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    quantile: float,
+    seed: int = 42,
+    params: dict | None = None,
+    feature_names: list[str] | None = None,
+) -> tuple:
     """Train LightGBM model with quantile regression objective."""
     if not LIGHTGBM_AVAILABLE:
         return None, None
@@ -789,11 +852,21 @@ def train_lightgbm_quantile(train_x: np.ndarray, train_y: np.ndarray, test_x: np
         final_params.update(params)
     final_params.update({"objective": "quantile", "alpha": quantile, "random_state": seed, "n_jobs": -1, "verbose": -1})
     model = lgb.LGBMRegressor(**final_params)
-    model.fit(train_x, train_y)
-    return model, model.predict(test_x)
+    train_input = feature_frame(train_x, feature_names)
+    test_input = feature_frame(test_x, feature_names)
+    model.fit(train_input, train_y)
+    return model, model.predict(test_input)
 
 
-def train_xgboost_quantile(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, quantile: float, seed: int = 42, params: dict | None = None) -> tuple:
+def train_xgboost_quantile(
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    test_x: np.ndarray,
+    quantile: float,
+    seed: int = 42,
+    params: dict | None = None,
+    feature_names: list[str] | None = None,
+) -> tuple:
     """Train XGBoost model with quantile regression objective."""
     if not XGBOOST_AVAILABLE:
         return None, None
@@ -811,8 +884,10 @@ def train_xgboost_quantile(train_x: np.ndarray, train_y: np.ndarray, test_x: np.
         final_params.update(params)
     final_params.update({"objective": "reg:quantileerror", "quantile_alpha": quantile, "random_state": seed, "n_jobs": -1, "verbosity": 0})
     model = xgb.XGBRegressor(**final_params)
-    model.fit(train_x, train_y)
-    return model, model.predict(test_x)
+    train_input = feature_frame(train_x, feature_names)
+    test_input = feature_frame(test_x, feature_names)
+    model.fit(train_input, train_y)
+    return model, model.predict(test_input)
 
 
 def save_metrics_csv(output_dir: Path, rows: list[dict[str, float | str]]) -> Path:
@@ -1449,6 +1524,7 @@ def train_and_plot(
     paths: list[Path], target: str, output_dir: Path, max_rows: int, test_fraction: float,
     seed: int, knn_k: int, knn_train_limit: int, cv_folds: int = 5,
     optimize_hyperparams: bool = False, optuna_trials: int = 20,
+    enable_tabpfn: bool = False, tabpfn_train_limit: int = 1000,
 ) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     models_dir = output_dir / "trained_models"
@@ -1518,7 +1594,7 @@ def train_and_plot(
     if LIGHTGBM_AVAILABLE:
         try:
             lgb_params = optimize_lightgbm_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-            lgb_model, lgb_pred = train_lightgbm(train_x, train_y, test_x, seed, params=lgb_params)
+            lgb_model, lgb_pred = train_lightgbm(train_x, train_y, test_x, seed, params=lgb_params, feature_names=feature_names)
             if lgb_model is not None and lgb_pred is not None:
                 trained_models["lightgbm"] = lgb_model
                 results.append({"model": "LightGBM", **metrics(test_y, lgb_pred)})
@@ -1530,7 +1606,7 @@ def train_and_plot(
     if XGBOOST_AVAILABLE:
         try:
             xgb_params = optimize_xgboost_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-            xgb_model, xgb_pred = train_xgboost(train_x, train_y, test_x, seed, params=xgb_params)
+            xgb_model, xgb_pred = train_xgboost(train_x, train_y, test_x, seed, params=xgb_params, feature_names=feature_names)
             if xgb_model is not None and xgb_pred is not None:
                 trained_models["xgboost"] = xgb_model
                 results.append({"model": "XGBoost", **metrics(test_y, xgb_pred)})
@@ -1542,7 +1618,7 @@ def train_and_plot(
     if CATBOOST_AVAILABLE:
         try:
             cb_params = optimize_catboost_params(train_x, train_y, cv_folds, seed, optuna_trials) if optimize_hyperparams else None
-            cb_model, cb_pred = train_catboost(train_x, train_y, test_x, seed, params=cb_params)
+            cb_model, cb_pred = train_catboost(train_x, train_y, test_x, seed, params=cb_params, feature_names=feature_names)
             if cb_model is not None and cb_pred is not None:
                 trained_models["catboost"] = cb_model
                 results.append({"model": "CatBoost", **metrics(test_y, cb_pred)})
@@ -1556,7 +1632,7 @@ def train_and_plot(
         q_params = optimize_lightgbm_params(train_x, train_y, cv_folds, seed, optuna_trials, objective="quantile") if optimize_hyperparams else None
         for q in [0.90, 0.95, 0.99]:
             try:
-                q_model, q_pred = train_lightgbm_quantile(train_x, train_y, test_x, q, seed, params=q_params)
+                q_model, q_pred = train_lightgbm_quantile(train_x, train_y, test_x, q, seed, params=q_params, feature_names=feature_names)
                 if q_model is not None and q_pred is not None:
                     trained_models[f"lightgbm_quantile_p{int(q * 100)}"] = q_model
                     quantile_preds.append(q_pred)
@@ -1571,7 +1647,7 @@ def train_and_plot(
         q_params = optimize_xgboost_params(train_x, train_y, cv_folds, seed, optuna_trials, objective="reg:quantileerror") if optimize_hyperparams else None
         for q in [0.90, 0.95, 0.99]:
             try:
-                q_model, q_pred = train_xgboost_quantile(train_x, train_y, test_x, q, seed, params=q_params)
+                q_model, q_pred = train_xgboost_quantile(train_x, train_y, test_x, q, seed, params=q_params, feature_names=feature_names)
                 if q_model is not None and q_pred is not None:
                     trained_models[f"xgboost_quantile_p{int(q * 100)}"] = q_model
                     quantile_preds.append(q_pred)
@@ -1581,16 +1657,16 @@ def train_and_plot(
             xgb_q_pred = np.mean(quantile_preds, axis=0)
             results.append({"model": "XGBoost Quantile (p90/p95/p99)", **metrics(test_y, xgb_q_pred)})
 
-    if TABPFN_AVAILABLE:
+    if enable_tabpfn and TABPFN_AVAILABLE:
         try:
             pfn_params = optimize_tabpfn_params(seed, optuna_trials) if optimize_hyperparams else None
-            pfn_model, pfn_pred = train_tabpfn(train_x, train_y, test_x, seed, params=pfn_params)
+            pfn_model, pfn_pred = train_tabpfn(train_x, train_y, test_x, seed, params=pfn_params, train_limit=tabpfn_train_limit)
             if pfn_model is not None and pfn_pred is not None:
                 trained_models["tabpfn"] = pfn_model
                 results.append({"model": "TabPFN", **metrics(test_y, pfn_pred)})
         except Exception as e:
             print(f"Warning: TabPFN training failed: {e}")
-    else:
+    elif enable_tabpfn:
         print("Warning: TabPFN not available")
 
     # Save everything only after training/evaluation finishes.
@@ -1647,6 +1723,7 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
         result = train_and_plot(
             paths, job["target"], Path(job["output_dir"]), args.max_rows, args.test_fraction,
             args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
+            args.enable_tabpfn, args.tabpfn_train_limit,
         )
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)
@@ -1678,6 +1755,7 @@ def mode_compare(args: argparse.Namespace) -> int:
     result = train_and_plot(
         paths, args.target, args.output_dir, args.max_rows, args.test_fraction,
         args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
+        args.enable_tabpfn, args.tabpfn_train_limit,
     )
     print(f"target: {args.target}")
     print(f"cv_folds: {args.cv_folds}")
