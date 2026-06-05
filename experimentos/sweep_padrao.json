@@ -4,7 +4,7 @@
   "gpu_telemetry": "off",
   "gpu_telemetry_during": "off",
   "telemetry_interval_ms": 1000,
-  "seeds": [67],
+  "seeds": [42],
   "kernels_per_thread": 1200,
   "warmup_kernels": 20,
   "gpu_load_profiles": [

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import csv
 import heapq
-import inspect
 import json
 import math
 import os
@@ -57,15 +56,6 @@ try:
 except ImportError:
     CATBOOST_AVAILABLE = False
 
-try:
-    from tabpfn import TabPFNRegressor  # type: ignore
-    TABPFN_AVAILABLE = True
-except ImportError:
-    try:
-        from tab_pfn import TabPFNRegressor  # type: ignore
-        TABPFN_AVAILABLE = True
-    except ImportError:
-        TABPFN_AVAILABLE = False
 
 try:
     import optuna
@@ -162,9 +152,6 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--optimize-hyperparams", action="store_true", help="Use Optuna to optimize hyperparameters.")
     compare_parser.add_argument("--optuna-trials", type=int, default=20, help="Number of Optuna trials for hyperparameter optimization.")
     compare_parser.add_argument("--dependency-only", "--skip-training", action="store_true", help="Generate dependency/independence CSVs and plots without training models.")
-    compare_parser.add_argument("--enable-tabpfn", action="store_true", help="Train TabPFN. Disabled by default because large CPU datasets are too slow.")
-    compare_parser.add_argument("--tabpfn-device", choices=("auto", "cpu", "cuda"), default="auto", help="Device used by TabPFN. auto uses CUDA when available, otherwise CPU.")
-    compare_parser.add_argument("--tabpfn-train-limit", type=int, default=1000, help="Maximum CPU rows used by TabPFN when --enable-tabpfn is set. Ignored on CUDA.")
     
     baseline_parser = subparsers.add_parser("baseline", help="Train linear/ridge/quadratic regression models")
     baseline_parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Directory containing experiment result CSVs.")
@@ -535,7 +522,6 @@ def optimize_boosting_params(x: np.ndarray, y: np.ndarray, cv_folds: int, seed: 
     return study.best_params
 
 
-
 def safe_cv_folds(cv_folds: int, n_rows: int) -> int:
     return max(2, min(cv_folds, n_rows))
 
@@ -628,18 +614,6 @@ def optimize_catboost_params(x: np.ndarray, y: np.ndarray, cv_folds: int, seed: 
         return float(np.mean(-scores))
     study = optuna.create_study(direction="minimize", sampler=TPESampler(seed=seed), pruner=MedianPruner())
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-    return study.best_params
-
-
-def optimize_tabpfn_params(seed: int, n_trials: int = 20):
-    if not OPTUNA_AVAILABLE or not TABPFN_AVAILABLE:
-        return {"n_ensemble": 10}
-    # TabPFN is expensive and version-dependent. Keep the search small and safe.
-    study = optuna.create_study(direction="minimize", sampler=TPESampler(seed=seed), pruner=MedianPruner())
-    def objective(trial: optuna.Trial) -> float:
-        # Used only to select a deterministic ensemble size; real fitting happens once later.
-        return float(trial.suggest_int("n_ensemble", 4, 16))
-    study.optimize(objective, n_trials=min(n_trials, 5), show_progress_bar=False)
     return study.best_params
 
 
@@ -783,74 +757,6 @@ def train_catboost(
     test_input = feature_frame(test_x, feature_names)
     model.fit(train_input, train_y)
     return model, model.predict(test_input)
-
-
-def tabpfn_cuda_available() -> bool:
-    try:
-        import torch  # type: ignore
-    except ImportError:
-        return False
-    try:
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
-
-
-def resolve_tabpfn_device(requested_device: str) -> str:
-    if requested_device == "auto":
-        return "cuda" if tabpfn_cuda_available() else "cpu"
-    return requested_device
-
-
-def _make_tabpfn(seed: int, n_ensemble: int = 10, device: str = "cpu"):
-    signature = inspect.signature(TabPFNRegressor)
-    kwargs = {}
-    if "device" in signature.parameters:
-        kwargs["device"] = device
-    elif device == "cuda":
-        print("Warning: TabPFNRegressor has no device parameter; cannot force CUDA for this installed version.")
-    if "n_ensemble" in signature.parameters:
-        kwargs["n_ensemble"] = n_ensemble
-    elif "N_ensemble_configurations" in signature.parameters:
-        kwargs["N_ensemble_configurations"] = n_ensemble
-    if "seed" in signature.parameters:
-        kwargs["seed"] = seed
-    elif "random_state" in signature.parameters:
-        kwargs["random_state"] = seed
-    return TabPFNRegressor(**kwargs)
-
-
-def train_tabpfn(
-    train_x: np.ndarray,
-    train_y: np.ndarray,
-    test_x: np.ndarray,
-    seed: int = 42,
-    params: dict | None = None,
-    train_limit: int = 1000,
-    requested_device: str = "auto",
-) -> tuple:
-    """Train TabPFN model."""
-    if not TABPFN_AVAILABLE:
-        return None, None
-    try:
-        n_ensemble = int((params or {}).get("n_ensemble", 10))
-        device = resolve_tabpfn_device(requested_device)
-        if device == "cuda" and not tabpfn_cuda_available():
-            print("Warning: TabPFN CUDA requested, but torch.cuda.is_available() is false. Skipping TabPFN.")
-            return None, None
-        effective_train_limit = train_limit if device == "cpu" else 0
-        if effective_train_limit > 0 and len(train_y) > effective_train_limit:
-            rng = np.random.default_rng(seed)
-            indices = rng.choice(len(train_y), effective_train_limit, replace=False)
-            train_x = train_x[indices]
-            train_y = train_y[indices]
-        print(f"TabPFN device: {device}; train_rows: {len(train_y)}")
-        model = _make_tabpfn(seed, n_ensemble=n_ensemble, device=device)
-        model.fit(train_x, train_y)
-        return model, model.predict(test_x)
-    except Exception as e:
-        print(f"Warning: TabPFN training failed: {e}")
-        return None, None
 
 
 def train_lightgbm_quantile(
@@ -1650,7 +1556,6 @@ def train_and_plot(
     paths: list[Path], target: str, output_dir: Path, max_rows: int, test_fraction: float,
     seed: int, knn_k: int, knn_train_limit: int, cv_folds: int = 5,
     optimize_hyperparams: bool = False, optuna_trials: int = 20,
-    enable_tabpfn: bool = False, tabpfn_train_limit: int = 1000, tabpfn_device: str = "auto",
 ) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     models_dir = output_dir / "trained_models"
@@ -1668,7 +1573,6 @@ def train_and_plot(
     train_x, test_x, train_y, test_y = train_test_split(x, y, test_fraction, seed)
     train_x_std, test_x_std, mean, scale = standardize(train_x, test_x)
 
-    resolved_tabpfn_device = resolve_tabpfn_device(tabpfn_device) if enable_tabpfn and TABPFN_AVAILABLE else tabpfn_device
     model_signature: dict[str, object] = {
         "target": target,
         "seed": seed,
@@ -1679,10 +1583,6 @@ def train_and_plot(
         "optuna_trials": optuna_trials,
         "knn_k": knn_k,
         "knn_train_limit": knn_train_limit,
-        "enable_tabpfn": enable_tabpfn,
-        "tabpfn_train_limit": tabpfn_train_limit,
-        "tabpfn_device": tabpfn_device,
-        "resolved_tabpfn_device": resolved_tabpfn_device,
         "source_files": [str(path) for path in paths],
         "rows_loaded": original_rows,
         "rows_used": len(y),
@@ -1905,27 +1805,6 @@ def train_and_plot(
             xgb_q_pred = np.mean(quantile_preds, axis=0)
             add_result("XGBoost Quantile (p90/p95/p99)", xgb_q_pred)
 
-    if enable_tabpfn and TABPFN_AVAILABLE:
-        try:
-            pfn_params = optimize_tabpfn_params(seed, optuna_trials) if optimize_hyperparams else None
-            pfn_model, pfn_pred = fit_or_resume(
-                "tabpfn",
-                lambda: train_tabpfn(
-                    train_x,
-                    train_y,
-                    test_x,
-                    seed,
-                    params=pfn_params,
-                    train_limit=tabpfn_train_limit,
-                    requested_device=tabpfn_device,
-                ),
-                test_x,
-            )
-            add_result("TabPFN", pfn_pred)
-        except Exception as e:
-            print(f"Warning: TabPFN training failed: {e}")
-    elif enable_tabpfn:
-        print("Warning: TabPFN not available")
 
     saved_model_paths = sorted(set(saved_model_paths))
 
@@ -1988,7 +1867,6 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
             result = train_and_plot(
                 paths, job["target"], Path(job["output_dir"]), args.max_rows, args.test_fraction,
                 args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
-                args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
             )
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)
@@ -2026,7 +1904,6 @@ def mode_compare(args: argparse.Namespace) -> int:
         result = train_and_plot(
             paths, args.target, args.output_dir, args.max_rows, args.test_fraction,
             args.seed, args.knn_k, args.knn_train_limit, args.cv_folds, args.optimize_hyperparams, args.optuna_trials,
-            args.enable_tabpfn, args.tabpfn_train_limit, args.tabpfn_device,
         )
     print(f"target: {args.target}")
     print(f"cv_folds: {args.cv_folds}")
