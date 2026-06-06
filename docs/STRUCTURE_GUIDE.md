@@ -145,9 +145,7 @@ python3 scripts/02_gerar_resultados_sweep.py \
 # Train all 11+ models with cross-validation
 python3 scripts/03_regressor_analysis.py compare \
   --results-dir resultados/sweep_x \
-  --cv-folds 5 \
-  --optimize-hyperparams \
-  --optuna-trials 30
+  --cv-folds 5
 ```
 
 ### 6️⃣ Inferência (Prediction)

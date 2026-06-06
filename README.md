@@ -45,9 +45,7 @@ Rodar regressão:
 	python3 scripts/03_regressor_analysis.py compare \
 	  --results-dir resultados/sweep_moderado_sem_estimativas_20260527_121911 \
 	  --target response_time_us \
-	  --cv-folds 5 \
-	  --optimize-hyperparams \
-	  --optuna-trials 30
+	  --cv-folds 5
 
 Gerar CSV para Gantt:
 
@@ -59,15 +57,13 @@ Gerar CSV para Gantt:
 
 Windows:
 
-	.\scripts\analisar_sweeps_normal_e_telemetria.ps1 -CvFolds 5 -OptunaTrials 30
+	.\scripts\analisar_sweeps_normal_e_telemetria.ps1 -CvFolds 5
 
 Windows com pasta específica:
 
 	.\scripts\analisar_sweeps_normal_e_telemetria.ps1 `
 	  -NormalResultsDir "resultados/sweep_moderado_sem_estimativas_20260527_121911" `
-	  -CvFolds 5 `
-	  -OptimizeHyperparams $true `
-	  -OptunaTrials 30
+	  -CvFolds 5
 
 Linux/Mac:
 
@@ -77,16 +73,11 @@ Linux/Mac com parâmetros:
 
 	RESULTS_DIRS="resultados/sweep_x resultados/sweep_y" \
 	CV_FOLDS=5 \
-	OPTIMIZE_HYPERPARAMS=true \
-	OPTUNA_TRIALS=30 \
 	bash scripts/analisar_sweeps_normal_e_telemetria.sh
 
 ## 5. Parâmetros Principais
 
 - --cv-folds: número de folds da validação cruzada.
-- --optimize-hyperparams: ativa otimização com Optuna.
-- --optuna-trials: número de tentativas do Optuna.
-- --max-rows: limite de linhas usadas na análise.
 - --target: variável alvo da regressão.
 
 Targets suportados:

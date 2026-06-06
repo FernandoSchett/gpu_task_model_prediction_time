@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Plot rankings of the best regressor found in each analysis subfolder."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_ANALYSIS_ROOT = REPO_ROOT / "resultados" / "analises_regressao"
+TARGETS = ("response_time_us", "queueing_delay_us", "slowdown")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--analysis-root", type=Path, default=DEFAULT_ANALYSIS_ROOT)
+    parser.add_argument("--top-n", type=int, default=20)
+    return parser.parse_args()
+
+
+def condition_from_dir(path: Path) -> str:
+    name = path.name
+    if name.startswith("sem_telemetria"):
+        return "sem_telemetria"
+    if name.startswith("com_telemetria"):
+        return "com_telemetria"
+    return name
+
+
+def load_rows(analysis_root: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for summary_path in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/training_summary.csv")):
+        condition = condition_from_dir(summary_path.parent)
+        with summary_path.open("r", encoding="utf-8", newline="") as file:
+            for row in csv.DictReader(file):
+                row = dict(row)
+                row["condition"] = condition
+                rows.append(row)
+    if not rows:
+        raise SystemExit(f"Nenhum training_summary.csv encontrado em {analysis_root}")
+    return rows
+
+
+def write_rankings_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    fields = [
+        "condition",
+        "label",
+        "target",
+        "best_model",
+        "best_mae",
+        "best_rmse",
+        "best_r2",
+        "rows_used",
+        "metrics_csv",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        for row in sorted(rows, key=lambda item: (item["target"], -float(item["best_r2"]), float(item["best_rmse"]))):
+            writer.writerow({field: row.get(field, "") for field in fields})
+
+
+def short_label(row: dict[str, str]) -> str:
+    condition = "sem" if row["condition"] == "sem_telemetria" else "com"
+    return f"{condition}:{row['label']}"
+
+
+def plot_target_rankings(output_dir: Path, rows: list[dict[str, str]], top_n: int) -> None:
+    for target in TARGETS:
+        target_rows = [row for row in rows if row["target"] == target]
+        target_rows.sort(key=lambda row: (float(row["best_r2"]), -float(row["best_rmse"])), reverse=True)
+        target_rows = target_rows[:top_n]
+        labels = [short_label(row) for row in target_rows]
+        values = [float(row["best_r2"]) for row in target_rows]
+        colors = ["#4c78a8" if row["condition"] == "sem_telemetria" else "#f58518" for row in target_rows]
+
+        fig, ax = plt.subplots(figsize=(13, max(6, len(target_rows) * 0.36)))
+        y = np.arange(len(target_rows))
+        ax.barh(y, values, color=colors)
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("R2 do melhor modelo")
+        ax.set_title(f"Top {len(target_rows)} recortes onde os modelos predizem melhor - {target}")
+        ax.axvline(0.0, color="black", linewidth=0.8)
+        for index, row in enumerate(target_rows):
+            value = float(row["best_r2"])
+            ax.text(
+                value,
+                index,
+                f" {value:.3f} | {row['best_model']} | RMSE {float(row['best_rmse']):.2f}",
+                va="center",
+                fontsize=8,
+            )
+        fig.tight_layout()
+        fig.savefig(output_dir / f"best_model_top_{target}.png", dpi=160)
+        plt.close(fig)
+
+
+def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]]) -> None:
+    grouped: dict[tuple[str, str], list[float]] = {}
+    for row in rows:
+        grouped.setdefault((row["condition"], row["target"]), []).append(float(row["best_r2"]))
+
+    labels = []
+    values = []
+    colors = []
+    for target in TARGETS:
+        for condition in ("sem_telemetria", "com_telemetria"):
+            labels.append(f"{condition}\n{target}")
+            values.append(float(np.mean(grouped.get((condition, target), [np.nan]))))
+            colors.append("#4c78a8" if condition == "sem_telemetria" else "#f58518")
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = np.arange(len(labels))
+    ax.bar(x, values, color=colors)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.set_ylabel("R2 medio do melhor modelo por recorte")
+    ax.set_title("Comparacao geral de previsibilidade por condicao")
+    ax.axhline(0.0, color="black", linewidth=0.8)
+    for index, value in enumerate(values):
+        ax.text(index, value, f"{value:.3f}", ha="center", va="bottom", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "best_model_condition_overview.png", dpi=160)
+    plt.close(fig)
+
+
+def main() -> int:
+    args = parse_args()
+    rows = load_rows(args.analysis_root)
+    output_dir = args.analysis_root
+    write_rankings_csv(output_dir / "best_model_rankings.csv", rows)
+    plot_target_rankings(output_dir, rows, args.top_n)
+    plot_condition_overview(output_dir, rows)
+    print(f"rankings_csv: {output_dir / 'best_model_rankings.csv'}")
+    print(f"plots_dir: {output_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

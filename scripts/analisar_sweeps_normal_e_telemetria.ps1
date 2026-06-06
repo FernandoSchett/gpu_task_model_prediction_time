@@ -4,12 +4,10 @@ param(
     [string]$TelemetryResultsDirs = "",
     [string]$TelemetryResultsDir = "",
     [string]$AnalysisRoot = "resultados/analises_regressao",
-    [long]$MaxRows = 9223372036854775807,
     [string]$Targets = "response_time_us queueing_delay_us slowdown",
     [string]$GpuTargets = "10 50 100 120",
     [int]$CvFolds = 5,
-    [bool]$OptimizeHyperparams = $false,
-    [int]$OptunaTrials = 20
+    [bool]$DependencyOnly = $false
 )
 
 Set-StrictMode -Version 3.0
@@ -30,12 +28,10 @@ if ($env:NORMAL_RESULTS_DIR -and -not $NormalResultsDirs) { $NormalResultsDirs =
 if ($env:TELEMETRY_RESULTS_DIRS) { $TelemetryResultsDirs = $env:TELEMETRY_RESULTS_DIRS }
 if ($env:TELEMETRY_RESULTS_DIR -and -not $TelemetryResultsDirs) { $TelemetryResultsDirs = $env:TELEMETRY_RESULTS_DIR }
 if ($env:ANALYSIS_ROOT) { $AnalysisRoot = $env:ANALYSIS_ROOT }
-if ($env:MAX_ROWS) { $MaxRows = [int]$env:MAX_ROWS }
 if ($env:TARGETS) { $Targets = $env:TARGETS }
 if ($env:GPU_TARGETS) { $GpuTargets = $env:GPU_TARGETS }
 if ($env:CV_FOLDS) { $CvFolds = [int]$env:CV_FOLDS }
-if ($env:OPTIMIZE_HYPERPARAMS -eq "true" -or $env:OPTIMIZE_HYPERPARAMS -eq "1") { $OptimizeHyperparams = $true }
-if ($env:OPTUNA_TRIALS) { $OptunaTrials = [int]$env:OPTUNA_TRIALS }
+if ($env:DEPENDENCY_ONLY -eq "true" -or $env:DEPENDENCY_ONLY -eq "1") { $DependencyOnly = $true }
 
 # Function to find matching directories
 function Get-MatchingDirs {
@@ -122,13 +118,11 @@ function Invoke-Analysis {
         "--analysis-dir", $analysisDir,
         "--jobs-file", "$analysisDir/analysis_jobs.csv",
         "--first-sweep",
-        "--max-rows", $MaxRows.ToString(),
-        "--cv-folds", $CvFolds.ToString(),
-        "--optuna-trials", $OptunaTrials.ToString()
+        "--cv-folds", $CvFolds.ToString()
     )
-    
-    if ($OptimizeHyperparams) {
-        $pythonArgs += "--optimize-hyperparams"
+
+    if ($DependencyOnly) {
+        $pythonArgs += "--dependency-only"
     }
     
     # Then run regressor analysis
@@ -137,6 +131,22 @@ function Invoke-Analysis {
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Erro ao executar analise de regressao"
         exit $LASTEXITCODE
+    }
+
+    if (Test-Path "scripts/05_plot_best_model_rankings.py") {
+        & python3 "scripts/05_plot_best_model_rankings.py" "--analysis-root" $AnalysisRoot
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Erro ao gerar ranking dos melhores modelos"
+            exit $LASTEXITCODE
+        }
+    }
+
+    if ($DependencyOnly -and (Test-Path "scripts/06_plot_dependency_rankings.py")) {
+        & python3 "scripts/06_plot_dependency_rankings.py" "--analysis-root" $AnalysisRoot
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Erro ao gerar ranking de dependencia"
+            exit $LASTEXITCODE
+        }
     }
 }
 

@@ -5,15 +5,48 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+PRESERVED_ENV_VARS=(
+  RESULTS_DIR
+  RESULTS_DIRS
+  ANALYSIS_DIR
+  TARGETS
+  GPU_TARGETS
+  CV_FOLDS
+  DEPENDENCY_ONLY
+  MPLCONFIGDIR
+)
+for var_name in "${PRESERVED_ENV_VARS[@]}"; do
+  if [[ -v "${var_name}" ]]; then
+    printf -v "PRESERVED_${var_name}" "%s" "${!var_name}"
+    printf -v "PRESERVED_${var_name}_SET" "%s" "1"
+  else
+    printf -v "PRESERVED_${var_name}_SET" "%s" ""
+  fi
+done
+
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+for var_name in "${PRESERVED_ENV_VARS[@]}"; do
+  set_var_name="PRESERVED_${var_name}_SET"
+  if [[ -n "${!set_var_name}" ]]; then
+    value_var_name="PRESERVED_${var_name}"
+    printf -v "${var_name}" "%s" "${!value_var_name}"
+    export "${var_name}"
+  fi
+done
+
 RESULTS_DIR="${RESULTS_DIR:-}"
 RESULTS_DIRS="${RESULTS_DIRS:-${RESULTS_DIR}}"
 ANALYSIS_DIR="${ANALYSIS_DIR:-}"
-MAX_ROWS="${MAX_ROWS:-120000}"
 TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
-OPTIMIZE_HYPERPARAMS="${OPTIMIZE_HYPERPARAMS:-false}"
-OPTUNA_TRIALS="${OPTUNA_TRIALS:-20}"
+DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
 MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-gpu-task-model}"
 export MPLCONFIGDIR
 
@@ -50,13 +83,19 @@ COMPARE_ARGS=(
   --analysis-dir "${ANALYSIS_DIR}"
   --jobs-file "${ANALYSIS_DIR}/analysis_jobs.csv"
   --first-sweep
-  --max-rows "${MAX_ROWS}"
   --cv-folds "${CV_FOLDS}"
-  --optuna-trials "${OPTUNA_TRIALS}"
 )
 
-if [[ "${OPTIMIZE_HYPERPARAMS}" == "true" ]] || [[ "${OPTIMIZE_HYPERPARAMS}" == "1" ]]; then
-  COMPARE_ARGS+=(--optimize-hyperparams)
+if [[ "${DEPENDENCY_ONLY}" == "true" ]] || [[ "${DEPENDENCY_ONLY}" == "1" ]]; then
+  COMPARE_ARGS+=(--dependency-only)
 fi
 
 python3 scripts/03_regressor_analysis.py "${COMPARE_ARGS[@]}"
+
+if [[ -f "scripts/05_plot_best_model_rankings.py" ]]; then
+  python3 scripts/05_plot_best_model_rankings.py --analysis-root "$(dirname "${ANALYSIS_DIR}")"
+fi
+
+if [[ "${DEPENDENCY_ONLY}" == "true" || "${DEPENDENCY_ONLY}" == "1" ]] && [[ -f "scripts/06_plot_dependency_rankings.py" ]]; then
+  python3 scripts/06_plot_dependency_rankings.py --analysis-root "$(dirname "${ANALYSIS_DIR}")"
+fi

@@ -5,16 +5,50 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+PRESERVED_ENV_VARS=(
+  NORMAL_RESULTS_DIR
+  NORMAL_RESULTS_DIRS
+  TELEMETRY_RESULTS_DIR
+  TELEMETRY_RESULTS_DIRS
+  ANALYSIS_ROOT
+  TARGETS
+  GPU_TARGETS
+  CV_FOLDS
+  DEPENDENCY_ONLY
+)
+for var_name in "${PRESERVED_ENV_VARS[@]}"; do
+  if [[ -v "${var_name}" ]]; then
+    printf -v "PRESERVED_${var_name}" "%s" "${!var_name}"
+    printf -v "PRESERVED_${var_name}_SET" "%s" "1"
+  else
+    printf -v "PRESERVED_${var_name}_SET" "%s" ""
+  fi
+done
+
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+for var_name in "${PRESERVED_ENV_VARS[@]}"; do
+  set_var_name="PRESERVED_${var_name}_SET"
+  if [[ -n "${!set_var_name}" ]]; then
+    value_var_name="PRESERVED_${var_name}"
+    printf -v "${var_name}" "%s" "${!value_var_name}"
+    export "${var_name}"
+  fi
+done
+
 NORMAL_RESULTS_DIRS="${NORMAL_RESULTS_DIRS:-${NORMAL_RESULTS_DIR:-}}"
 TELEMETRY_RESULTS_DIRS="${TELEMETRY_RESULTS_DIRS:-${TELEMETRY_RESULTS_DIR:-}}"
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
-MAX_ROWS="${MAX_ROWS:-0}"
 TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
-OPTIMIZE_HYPERPARAMS="${OPTIMIZE_HYPERPARAMS:-false}"
-OPTUNA_TRIALS="${OPTUNA_TRIALS:-20}"
+DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
 
 if [[ ! -f ".env" ]]; then
   echo "Erro: arquivo .env nao encontrado. Crie um .env com SEED=42." >&2
@@ -73,19 +107,15 @@ run_one() {
   echo "  results_dirs=${results_dirs}"
   echo "  analysis_dir=${analysis_dir}"
   echo "  targets=${TARGETS}"
-  echo "  max_rows=${MAX_ROWS}"
   echo "  cv_folds=${CV_FOLDS}"
-  echo "  optimize_hyperparams=${OPTIMIZE_HYPERPARAMS}"
-  echo "  optuna_trials=${OPTUNA_TRIALS}"
+  echo "  dependency_only=${DEPENDENCY_ONLY}"
 
   RESULTS_DIRS="${results_dirs}" \
   ANALYSIS_DIR="${analysis_dir}" \
-  MAX_ROWS="${MAX_ROWS}" \
   TARGETS="${TARGETS}" \
   GPU_TARGETS="${GPU_TARGETS}" \
   CV_FOLDS="${CV_FOLDS}" \
-  OPTIMIZE_HYPERPARAMS="${OPTIMIZE_HYPERPARAMS}" \
-  OPTUNA_TRIALS="${OPTUNA_TRIALS}" \
+  DEPENDENCY_ONLY="${DEPENDENCY_ONLY}" \
   bash scripts/analisar_regressoes_sweep.sh
 }
 
