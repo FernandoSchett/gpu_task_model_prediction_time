@@ -15,6 +15,7 @@ PRESERVED_ENV_VARS=(
   GPU_TARGETS
   CV_FOLDS
   DEPENDENCY_ONLY
+  DEPENDENCY_CACHE
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   if [[ -v "${var_name}" ]]; then
@@ -49,6 +50,7 @@ TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
 DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
+DEPENDENCY_CACHE="${DEPENDENCY_CACHE:-true}"
 
 if [[ ! -f ".env" ]]; then
   echo "Erro: arquivo .env nao encontrado. Crie um .env com SEED=42." >&2
@@ -109,6 +111,7 @@ run_one() {
   echo "  targets=${TARGETS}"
   echo "  cv_folds=${CV_FOLDS}"
   echo "  dependency_only=${DEPENDENCY_ONLY}"
+  echo "  dependency_cache=${DEPENDENCY_CACHE}"
 
   RESULTS_DIRS="${results_dirs}" \
   ANALYSIS_DIR="${analysis_dir}" \
@@ -116,6 +119,7 @@ run_one() {
   GPU_TARGETS="${GPU_TARGETS}" \
   CV_FOLDS="${CV_FOLDS}" \
   DEPENDENCY_ONLY="${DEPENDENCY_ONLY}" \
+  DEPENDENCY_CACHE="${DEPENDENCY_CACHE}" \
   bash scripts/analisar_regressoes_sweep.sh
 }
 

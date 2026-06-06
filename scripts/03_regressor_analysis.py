@@ -108,6 +108,7 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--knn-train-limit", type=int, default=DEFAULT_KNN_TRAIN_LIMIT)
     compare_parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
     compare_parser.add_argument("--dependency-only", "--skip-training", action="store_true", help="Generate correlation/dependency metrics without training models.")
+    compare_parser.add_argument("--no-dependency-cache", action="store_true", help="Recompute dependency metrics even when dependency_metrics.csv already exists.")
     
     baseline_parser = subparsers.add_parser("baseline", help="Train linear/ridge/quadratic regression models")
     baseline_parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Directory containing experiment result CSVs.")
@@ -856,9 +857,72 @@ def plot_dependency_feature_pearson(output_dir: Path, target: str, rows: list[di
     return path
 
 
-def dependency_only_result(paths: list[Path], target: str, output_dir: Path) -> dict[str, str]:
+def existing_dependency_result(paths: list[Path], target: str, output_dir: Path) -> dict[str, str] | None:
+    metrics_path = output_dir / "dependency_metrics.csv"
+    feature_plot = output_dir / "dependency_feature_pearson.png"
+    if not metrics_path.exists():
+        return None
+    values = {
+        "dependency_lag1_autocorrelation": "",
+        "dependency_abs_lag1_autocorrelation": "",
+        "dependency_durbin_watson": "",
+        "dependency_effective_sample_ratio_lag1": "",
+    }
+    rows_used = ""
+    try:
+        with metrics_path.open("r", encoding="utf-8", newline="") as file:
+            for row in csv.DictReader(file):
+                if row.get("category") != "temporal" or row.get("series") != target:
+                    continue
+                metric = row.get("metric", "")
+                if metric == "lag1_autocorrelation":
+                    values["dependency_lag1_autocorrelation"] = row.get("value", "")
+                    rows_used = row.get("n", "")
+                elif metric == "abs_lag1_autocorrelation":
+                    values["dependency_abs_lag1_autocorrelation"] = row.get("value", "")
+                elif metric == "durbin_watson":
+                    values["dependency_durbin_watson"] = row.get("value", "")
+                elif metric == "effective_sample_size_ratio_lag1":
+                    values["dependency_effective_sample_ratio_lag1"] = row.get("value", "")
+    except (OSError, csv.Error):
+        return None
+    if not all(values.values()):
+        return None
+    if not feature_plot.exists():
+        try:
+            with metrics_path.open("r", encoding="utf-8", newline="") as file:
+                plot_dependency_feature_pearson(output_dir, target, list(csv.DictReader(file)))
+        except (OSError, csv.Error):
+            pass
+    return {
+        "source_files": str(len(paths)),
+        "rows_loaded": rows_used,
+        "rows_used": rows_used,
+        "train_rows": "",
+        "test_rows": "",
+        "best_model": "",
+        "best_mae": "",
+        "best_rmse": "",
+        "best_r2": "",
+        "metrics_csv": "",
+        "mae_plot": "",
+        "rmse_plot": "",
+        "r2_plot": "",
+        "models_dir": "",
+        "dependency_metrics_csv": str(metrics_path),
+        "dependency_feature_plot": str(feature_plot),
+        "dependency_cached": "true",
+        **values,
+    }
+
+
+def dependency_only_result(paths: list[Path], target: str, output_dir: Path, use_cache: bool = True) -> dict[str, str]:
     if not paths:
         raise SystemExit("Nenhum CSV de resultados encontrado.")
+    if use_cache:
+        cached = existing_dependency_result(paths, target, output_dir)
+        if cached is not None:
+            return cached
     feature_names = list(BASE_FEATURES) + [f"kernel_type_{name}" for name in KERNEL_TYPES]
     feature_stats = {feature: CorrelationStats() for feature in feature_names}
     sequence_stats = SequenceDependencyStats()
@@ -904,6 +968,7 @@ def dependency_only_result(paths: list[Path], target: str, output_dir: Path) -> 
         "models_dir": "",
         "dependency_metrics_csv": str(metrics_path),
         "dependency_feature_plot": str(output_dir / "dependency_feature_pearson.png"),
+        "dependency_cached": "false",
         "dependency_lag1_autocorrelation": metric_value(lag1_acf),
         "dependency_abs_lag1_autocorrelation": metric_value(abs_lag1_acf),
         "dependency_durbin_watson": metric_value(durbin_watson),
@@ -1198,7 +1263,12 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
     for job in jobs:
         paths = result_paths(args.results_dir, args.first_sweep, job["include_regex"])
         if args.dependency_only:
-            result = dependency_only_result(paths, job["target"], Path(job["output_dir"]))
+            result = dependency_only_result(
+                paths,
+                job["target"],
+                Path(job["output_dir"]),
+                use_cache=not args.no_dependency_cache,
+            )
         else:
             result = train_and_plot(
                 paths, job["target"], Path(job["output_dir"]), args.test_fraction,
@@ -1207,7 +1277,8 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)
         if args.dependency_only:
-            print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} dependency_metrics={result['dependency_metrics_csv']}")
+            cached = " cached" if result.get("dependency_cached") == "true" else ""
+            print(f"{job['label']} {job['target']}:{cached} files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} dependency_metrics={result['dependency_metrics_csv']}")
         else:
             print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f} models_dir={result['models_dir']}")
 
@@ -1217,6 +1288,7 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
         "label", "target", "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows",
         "best_model", "best_mae", "best_rmse", "best_r2", "metrics_csv", "mae_plot", "rmse_plot",
         "r2_plot", "models_dir", "dependency_metrics_csv", "dependency_feature_plot",
+        "dependency_cached",
         "dependency_lag1_autocorrelation", "dependency_abs_lag1_autocorrelation",
         "dependency_durbin_watson", "dependency_effective_sample_ratio_lag1",
     ]
@@ -1234,7 +1306,12 @@ def mode_compare(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     paths = result_paths(args.results_dir, args.first_sweep, args.include_regex)
     if args.dependency_only:
-        result = dependency_only_result(paths, args.target, args.output_dir)
+        result = dependency_only_result(
+            paths,
+            args.target,
+            args.output_dir,
+            use_cache=not args.no_dependency_cache,
+        )
     else:
         result = train_and_plot(
             paths, args.target, args.output_dir, args.test_fraction,

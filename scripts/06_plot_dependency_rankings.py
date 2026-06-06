@@ -52,9 +52,43 @@ def load_rows(analysis_root: Path) -> list[dict[str, str]]:
                 row = dict(row)
                 row["condition"] = condition
                 rows.append(row)
+    if rows:
+        return rows
+
+    for metrics_path in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/*/*/dependency_metrics.csv")):
+        condition = condition_from_dir(metrics_path.parents[2])
+        label = metrics_path.parents[1].name
+        target = metrics_path.parent.name
+        row = {
+            "condition": condition,
+            "label": label,
+            "target": target,
+            "rows_used": "",
+            "dependency_metrics_csv": str(metrics_path),
+            "dependency_lag1_autocorrelation": "",
+            "dependency_abs_lag1_autocorrelation": "",
+            "dependency_durbin_watson": "",
+            "dependency_effective_sample_ratio_lag1": "",
+        }
+        with metrics_path.open("r", encoding="utf-8", newline="") as file:
+            for metric_row in csv.DictReader(file):
+                if metric_row.get("category") != "temporal":
+                    continue
+                metric = metric_row.get("metric", "")
+                value = metric_row.get("value", "")
+                if metric == "lag1_autocorrelation":
+                    row["dependency_lag1_autocorrelation"] = value
+                    row["rows_used"] = metric_row.get("n", "")
+                elif metric == "abs_lag1_autocorrelation":
+                    row["dependency_abs_lag1_autocorrelation"] = value
+                elif metric == "durbin_watson":
+                    row["dependency_durbin_watson"] = value
+                elif metric == "effective_sample_size_ratio_lag1":
+                    row["dependency_effective_sample_ratio_lag1"] = value
+        rows.append(row)
     if not rows:
         raise SystemExit(
-            "Nenhum dependency_summary.csv encontrado. Rode primeiro com DEPENDENCY_ONLY=true."
+            "Nenhum dependency_summary.csv ou dependency_metrics.csv encontrado. Rode primeiro com DEPENDENCY_ONLY=true."
         )
     return rows
 
@@ -138,9 +172,14 @@ def plot_overview(output_dir: Path, rows: list[dict[str, str]]) -> None:
     colors = []
     for target in TARGETS:
         for condition in ("sem_telemetria", "com_telemetria"):
+            group_values = grouped.get((condition, target), [])
+            if not group_values:
+                continue
             labels.append(f"{condition}\n{target}")
-            values.append(float(np.mean(grouped.get((condition, target), [np.nan]))))
+            values.append(float(np.mean(group_values)))
             colors.append("#4c78a8" if condition == "sem_telemetria" else "#f58518")
+    if not values:
+        return
     fig, ax = plt.subplots(figsize=(11, 5))
     x = np.arange(len(labels))
     ax.bar(x, values, color=colors)

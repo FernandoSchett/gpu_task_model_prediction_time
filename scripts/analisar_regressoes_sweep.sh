@@ -13,6 +13,7 @@ PRESERVED_ENV_VARS=(
   GPU_TARGETS
   CV_FOLDS
   DEPENDENCY_ONLY
+  DEPENDENCY_CACHE
   MPLCONFIGDIR
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
@@ -47,6 +48,7 @@ TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
 DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
+DEPENDENCY_CACHE="${DEPENDENCY_CACHE:-true}"
 MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-gpu-task-model}"
 export MPLCONFIGDIR
 
@@ -88,6 +90,10 @@ COMPARE_ARGS=(
 
 if [[ "${DEPENDENCY_ONLY}" == "true" ]] || [[ "${DEPENDENCY_ONLY}" == "1" ]]; then
   COMPARE_ARGS+=(--dependency-only)
+fi
+
+if [[ "${DEPENDENCY_CACHE}" == "false" ]] || [[ "${DEPENDENCY_CACHE}" == "0" ]]; then
+  COMPARE_ARGS+=(--no-dependency-cache)
 fi
 
 python3 scripts/03_regressor_analysis.py "${COMPARE_ARGS[@]}"
