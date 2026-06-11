@@ -87,7 +87,7 @@ def main():
     if not models_dir.exists():
         print(f"❌ Models directory not found: {models_dir}")
         print("Please run the analysis first:")
-        print("  python3 scripts/03_regressor_analysis.py compare --results-dir ./resultados/seu_sweep")
+        print("  python3 scripts/py_pipeline_A/A2_regressores_classicos.py compare --results-dir ./resultados/seu_sweep")
         return 1
     
     # 2. Load trained models

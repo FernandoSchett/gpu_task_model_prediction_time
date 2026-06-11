@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
 RESULTS_DIR = REPO_ROOT / "resultados"
 REQUIRED_COLUMNS = {
     "experiment_name",

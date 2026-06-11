@@ -13,9 +13,11 @@ PRESERVED_ENV_VARS=(
   ANALYSIS_ROOT
   TARGETS
   GPU_TARGETS
-  CV_FOLDS
-  DEPENDENCY_ONLY
-  DEPENDENCY_CACHE
+  EVT_BLOCK_SIZE
+  EVT_THRESHOLD_QUANTILE
+  EVT_DECLUSTER_RUN_LENGTH
+  EVT_RETURN_QUANTILES
+  EVT_CACHE
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   if [[ -v "${var_name}" ]]; then
@@ -42,54 +44,34 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   fi
 done
 
-NORMAL_RESULTS_DIRS="${NORMAL_RESULTS_DIRS:-${NORMAL_RESULTS_DIR:-}}"
-TELEMETRY_RESULTS_DIRS="${TELEMETRY_RESULTS_DIRS:-${TELEMETRY_RESULTS_DIR:-}}"
-
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
 TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
-CV_FOLDS="${CV_FOLDS:-5}"
-DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
-DEPENDENCY_CACHE="${DEPENDENCY_CACHE:-true}"
-
-if [[ ! -f ".env" ]]; then
-  echo "Erro: arquivo .env nao encontrado. Crie um .env com SEED=42." >&2
-  exit 1
-fi
-
-if ! grep -qE '^SEED=' ".env"; then
-  echo "Erro: .env existe, mas nao contem SEED=..." >&2
-  exit 1
-fi
-
-if [[ ! -f "scripts/03_regressor_analysis.py" ]]; then
-  echo "Erro: scripts/03_regressor_analysis.py nao encontrado." >&2
-  exit 1
-fi
-
-if [[ ! -f "scripts/analisar_regressoes_sweep.sh" ]]; then
-  echo "Erro: scripts/analisar_regressoes_sweep.sh nao encontrado." >&2
-  exit 1
+EVT_BLOCK_SIZE="${EVT_BLOCK_SIZE:-1024}"
+EVT_THRESHOLD_QUANTILE="${EVT_THRESHOLD_QUANTILE:-0.95}"
+EVT_DECLUSTER_RUN_LENGTH="${EVT_DECLUSTER_RUN_LENGTH:-50}"
+EVT_RETURN_QUANTILES="${EVT_RETURN_QUANTILES:-0.95 0.99 0.999}"
+EVT_CACHE="${EVT_CACHE:-true}"
+EVT_CACHE_ARGS=()
+if [[ "${EVT_CACHE}" == "false" ]] || [[ "${EVT_CACHE}" == "0" ]]; then
+  EVT_CACHE_ARGS+=(--no-cache)
 fi
 
 matching_dirs() {
   local pattern="$1"
-
-  if [[ ! -d "resultados" ]]; then
-    return 0
-  fi
-
-  find resultados -mindepth 1 -maxdepth 1 -type d -name "${pattern}" -print0 \
+  find resultados -mindepth 1 -maxdepth 1 -type d -name "${pattern}" -print0 2>/dev/null \
     | xargs -0 -r stat -c '%Y %n' \
     | sort -n \
     | cut -d' ' -f2- \
     | paste -sd ' ' -
 }
 
+NORMAL_RESULTS_DIRS="${NORMAL_RESULTS_DIRS:-${NORMAL_RESULTS_DIR:-}}"
+TELEMETRY_RESULTS_DIRS="${TELEMETRY_RESULTS_DIRS:-${TELEMETRY_RESULTS_DIR:-}}"
+
 if [[ -z "${NORMAL_RESULTS_DIRS}" ]]; then
   NORMAL_RESULTS_DIRS="$(matching_dirs 'sweep_moderado_sem_estimativas_[0-9]*' || true)"
 fi
-
 if [[ -z "${TELEMETRY_RESULTS_DIRS}" ]]; then
   TELEMETRY_RESULTS_DIRS="$(matching_dirs 'sweep_moderado_sem_estimativas_telemetry_*' || true)"
 fi
@@ -97,30 +79,32 @@ fi
 run_one() {
   local label="$1"
   local results_dirs="$2"
+  local analysis_dir="${ANALYSIS_ROOT}/${label}_sweep_moderado_sem_estimativas_agrupado"
 
   if [[ -z "${results_dirs}" ]]; then
     echo "Pastas do sweep ${label} nao encontradas." >&2
     exit 1
   fi
 
-  local analysis_dir="${ANALYSIS_ROOT}/${label}_sweep_moderado_sem_estimativas_agrupado"
+  python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
+    --results-dir ${results_dirs} \
+    --analysis-dir "${analysis_dir}" \
+    --targets ${TARGETS} \
+    --gpu-targets ${GPU_TARGETS}
 
-  echo "Analise ${label}:"
-  echo "  results_dirs=${results_dirs}"
-  echo "  analysis_dir=${analysis_dir}"
-  echo "  targets=${TARGETS}"
-  echo "  cv_folds=${CV_FOLDS}"
-  echo "  dependency_only=${DEPENDENCY_ONLY}"
-  echo "  dependency_cache=${DEPENDENCY_CACHE}"
-
-  RESULTS_DIRS="${results_dirs}" \
-  ANALYSIS_DIR="${analysis_dir}" \
-  TARGETS="${TARGETS}" \
-  GPU_TARGETS="${GPU_TARGETS}" \
-  CV_FOLDS="${CV_FOLDS}" \
-  DEPENDENCY_ONLY="${DEPENDENCY_ONLY}" \
-  DEPENDENCY_CACHE="${DEPENDENCY_CACHE}" \
-  bash scripts/analisar_regressoes_sweep.sh
+  EVT_BLOCK_SIZE="${EVT_BLOCK_SIZE}" \
+  EVT_THRESHOLD_QUANTILE="${EVT_THRESHOLD_QUANTILE}" \
+  EVT_DECLUSTER_RUN_LENGTH="${EVT_DECLUSTER_RUN_LENGTH}" \
+  python3 scripts/py_pipeline_B/B1_valores_extremos.py \
+    --results-dir ${results_dirs} \
+    --analysis-dir "${analysis_dir}" \
+    --jobs-file "${analysis_dir}/analysis_jobs.csv" \
+    --first-sweep \
+    --block-size "${EVT_BLOCK_SIZE}" \
+    --threshold-quantile "${EVT_THRESHOLD_QUANTILE}" \
+    --decluster-run-length "${EVT_DECLUSTER_RUN_LENGTH}" \
+    --return-quantiles ${EVT_RETURN_QUANTILES} \
+    "${EVT_CACHE_ARGS[@]}"
 }
 
 run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"

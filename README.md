@@ -32,48 +32,46 @@ Sweep normal e com telemetria:
 
 Análise inicial de slowdown:
 
-	python3 scripts/01_analyze_slowdown.py
+	python3 scripts/py_outros/A0_analisar_slowdown.py
 
 Preparar dados do sweep:
 
-	python3 scripts/02_gerar_resultados_sweep.py \
+	python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
 	  --results-dir resultados/sweep_moderado_sem_estimativas_20260527_121911 \
 	  --analysis-dir resultados/analises_regressao/meu_sweep
 
 Rodar regressão:
 
-	python3 scripts/03_regressor_analysis.py compare \
+	python3 scripts/py_pipeline_A/A2_regressores_classicos.py compare \
 	  --results-dir resultados/sweep_moderado_sem_estimativas_20260527_121911 \
 	  --target response_time_us \
 	  --cv-folds 5
 
 Gerar CSV para Gantt:
 
-	python3 scripts/04_build_gantt_csv.py \
+	python3 scripts/py_outros/A6_gerar_gantt_csv.py \
 	  --results-dir resultados/sweep_moderado_sem_estimativas_20260527_121911 \
 	  --output resultados/gantt_intervals.csv
 
 ## 4. Execução Automática
 
-Windows:
+Pipeline A - Machine Learning:
 
-	.\scripts\analisar_sweeps_normal_e_telemetria.ps1 -CvFolds 5
+	bash scripts/rodar_pipeline_a_machine_learning.sh
 
-Windows com pasta específica:
-
-	.\scripts\analisar_sweeps_normal_e_telemetria.ps1 `
-	  -NormalResultsDir "resultados/sweep_moderado_sem_estimativas_20260527_121911" `
-	  -CvFolds 5
-
-Linux/Mac:
-
-	bash scripts/analisar_sweeps_normal_e_telemetria.sh
-
-Linux/Mac com parâmetros:
+Pipeline A com parâmetros:
 
 	RESULTS_DIRS="resultados/sweep_x resultados/sweep_y" \
 	CV_FOLDS=5 \
-	bash scripts/analisar_sweeps_normal_e_telemetria.sh
+	bash scripts/rodar_pipeline_a_machine_learning.sh
+
+Pipeline B - Valores extremos:
+
+	bash scripts/rodar_pipeline_b_extremos.sh
+
+Pipeline A + B:
+
+	bash scripts/rodar_todas_pipelines.sh
 
 ## 5. Parâmetros Principais
 
@@ -113,11 +111,11 @@ Targets suportados:
 
 	bash scripts/rodar_experimentos.sh
 
-	python3 scripts/02_gerar_resultados_sweep.py \
+	python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
 	  --results-dir resultados/sweep_moderado_sem_estimativas_20260527_121911 \
 	  --analysis-dir resultados/analises_regressao/analise_rapida
 
-	python3 scripts/03_regressor_analysis.py compare \
+	python3 scripts/py_pipeline_A/A2_regressores_classicos.py compare \
 	  --results-dir resultados/sweep_moderado_sem_estimativas_20260527_121911 \
 	  --analysis-dir resultados/analises_regressao/analise_rapida \
 	  --jobs-file resultados/analises_regressao/analise_rapida/analysis_jobs.csv \

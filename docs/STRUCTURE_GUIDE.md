@@ -33,11 +33,21 @@ tstr_cuda/
 │               └── slowdown/                    # Outro target
 │
 ├── scripts/                           # 🐍 Python Scripts
-│   ├── 01_analyze_slowdown.py         # EDA
-│   ├── 02_gerar_resultados_sweep.py   # Data prep
-│   ├── 03_regressor_analysis.py       # ML training
-│   ├── 04_build_gantt_csv.py          # Timeline
-│   └── use_trained_models.py          # Model inference
+│   ├── py_pipeline_A/
+│   │   ├── A1_gerar_manifesto_analise.py
+│   │   ├── A2_regressores_classicos.py
+│   │   ├── A3_rankings_regressores.py
+│   │   ├── A4_rankings_dependencia.py
+│   │   ├── A5_modelos_sequenciais.py
+│   │   └── A7_usar_modelos_treinados.py
+│   ├── py_pipeline_B/
+│   │   └── B1_valores_extremos.py
+│   ├── py_outros/
+│   │   ├── A0_analisar_slowdown.py
+│   │   └── A6_gerar_gantt_csv.py
+│   ├── rodar_pipeline_a_machine_learning.sh
+│   ├── rodar_pipeline_b_extremos.sh
+│   └── rodar_todas_pipelines.sh
 │
 └── libs/                              # C++ Implementation
     ├── include/                       # Headers
@@ -59,7 +69,7 @@ tstr_cuda/
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│ 01_analyze_slowdown.py                      │
+│ A0_analisar_slowdown.py                     │
 │ Exploratory Data Analysis                   │
 │ - Calculate slowdown statistics             │
 │ - Identify outliers                         │
@@ -68,7 +78,7 @@ tstr_cuda/
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│ 02_gerar_resultados_sweep.py                │
+│ A1_gerar_manifesto_analise.py               │
 │ Data Preparation                            │
 │ - Scan sweep directories                    │
 │ - Extract GPU targets from filenames        │
@@ -78,8 +88,8 @@ tstr_cuda/
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│ 03_regressor_analysis.py (compare mode)     │
-│ Machine Learning Training                   │
+│ A2_regressores_classicos.py (compare mode)  │
+│ Pipeline A: classical ML                    │
 │                                             │
 │ Train 11+ Models:                           │
 │ - Linear/Ridge/Poly Ridge (baselines)       │
@@ -99,7 +109,7 @@ tstr_cuda/
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│ use_trained_models.py                       │
+│ A7_usar_modelos_treinados.py               │
 │ Model Inference                             │
 │ - Load saved models                         │
 │ - Make predictions on new data              │
@@ -129,13 +139,13 @@ pip install -r requirements.txt
 ### 3️⃣ Exploração (EDA)
 ```bash
 # Analyze slowdown patterns
-python3 scripts/01_analyze_slowdown.py --results-dir resultados/sweep_x
+python3 scripts/py_outros/A0_analisar_slowdown.py --results-dir resultados/sweep_x
 ```
 
 ### 4️⃣ Preparação (Data Prep)
 ```bash
 # Generate analysis job manifest
-python3 scripts/02_gerar_resultados_sweep.py \
+python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
   --results-dir resultados/sweep_x \
   --analysis-dir resultados/analises_regressao
 ```
@@ -143,7 +153,7 @@ python3 scripts/02_gerar_resultados_sweep.py \
 ### 5️⃣ Treinamento de Modelos (ML)
 ```bash
 # Train all 11+ models with cross-validation
-python3 scripts/03_regressor_analysis.py compare \
+python3 scripts/py_pipeline_A/A2_regressores_classicos.py compare \
   --results-dir resultados/sweep_x \
   --cv-folds 5
 ```
@@ -151,7 +161,7 @@ python3 scripts/03_regressor_analysis.py compare \
 ### 6️⃣ Inferência (Prediction)
 ```bash
 # Load trained models and predict on new data
-python3 scripts/use_trained_models.py
+python3 scripts/py_pipeline_A/A7_usar_modelos_treinados.py
 ```
 
 ---
@@ -248,7 +258,7 @@ df.profile_report().to_file("report.html")
 ## 🔒 Considerações de Data Quality
 
 ### Filtragem Automática
-O script `03_regressor_analysis.py` automaticamente:
+O script `A2_regressores_classicos.py` automaticamente:
 - Remove linhas com `cuda_error_code ≠ 0`
 - Remove valores NaN/Inf
 - Aplica deterministic sampling com seed=42
@@ -276,7 +286,7 @@ Se adicionar novos campos ao C++ benchmark:
 
 1. Atualize [DATA_DICTIONARY.md](DATA_DICTIONARY.md)
 2. Atualize [data_dictionary.csv](data_dictionary.csv)
-3. Atualize feature lists em `03_regressor_analysis.py`
+3. Atualize feature lists em `A2_regressores_classicos.py`
 4. Re-run análises com novos dados
 
 ---

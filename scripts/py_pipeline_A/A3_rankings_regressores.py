@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_ANALYSIS_ROOT = REPO_ROOT / "resultados" / "analises_regressao"
 TARGETS = ("response_time_us", "queueing_delay_us", "slowdown")
 

@@ -20,6 +20,7 @@ import pickle
 import random
 import re
 from pathlib import Path
+from statistics import NormalDist
 from typing import Iterable
 
 import matplotlib
@@ -60,10 +61,12 @@ except ImportError:
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
 DEFAULT_RESULTS_DIR = REPO_ROOT / "resultados"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "resultados" / "model_comparison"
 DEFAULT_KNN_TRAIN_LIMIT = 8000
+DEPENDENCY_MAX_LAG = 50
+DIAGNOSTIC_PLOT_SAMPLE_LIMIT = 50000
 TARGETS = ("response_time_us", "queueing_delay_us", "slowdown")
 KERNEL_TYPES = ("busy_wait", "compute", "memory", "mixed")
 BASE_FEATURES = (
@@ -712,6 +715,164 @@ def plot_metric(output_dir: Path, rows: list[dict[str, float | str]], metric: st
     return path
 
 
+def safe_plot_name(name: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", name.strip().lower()).strip("_")
+    return normalized or "model"
+
+
+def diagnostic_sample_indices(size: int, limit: int = DIAGNOSTIC_PLOT_SAMPLE_LIMIT) -> np.ndarray:
+    if size <= limit:
+        return np.arange(size)
+    return np.linspace(0, size - 1, num=limit, dtype=int)
+
+
+def residual_distribution_stats(model_name: str, residual: np.ndarray) -> dict[str, str]:
+    residual = np.asarray(residual, dtype=float)
+    residual = residual[np.isfinite(residual)]
+    if len(residual) == 0:
+        return {"model": model_name, "n": "0"}
+
+    mean = float(np.mean(residual))
+    std = float(np.std(residual, ddof=1)) if len(residual) > 1 else math.nan
+    centered = residual - mean
+    if len(residual) > 2 and math.isfinite(std) and std > 0:
+        z = centered / std
+        skewness = float(np.mean(z ** 3))
+        excess_kurtosis = float(np.mean(z ** 4) - 3.0)
+        jarque_bera = len(residual) / 6.0 * (skewness ** 2 + 0.25 * excess_kurtosis ** 2)
+        jarque_bera_p_approx = math.exp(-0.5 * jarque_bera)
+    else:
+        skewness = math.nan
+        excess_kurtosis = math.nan
+        jarque_bera = math.nan
+        jarque_bera_p_approx = math.nan
+
+    quantiles = np.quantile(residual, [0.05, 0.25, 0.5, 0.75, 0.95])
+    normal_like = (
+        math.isfinite(skewness)
+        and math.isfinite(excess_kurtosis)
+        and abs(skewness) < 0.5
+        and abs(excess_kurtosis) < 1.0
+    )
+    return {
+        "model": model_name,
+        "n": str(len(residual)),
+        "mean_error": metric_value(mean),
+        "std_error": metric_value(std),
+        "median_error": metric_value(float(quantiles[2])),
+        "q05_error": metric_value(float(quantiles[0])),
+        "q25_error": metric_value(float(quantiles[1])),
+        "q75_error": metric_value(float(quantiles[3])),
+        "q95_error": metric_value(float(quantiles[4])),
+        "skewness": metric_value(skewness),
+        "excess_kurtosis": metric_value(excess_kurtosis),
+        "jarque_bera": metric_value(jarque_bera),
+        "jarque_bera_p_approx": metric_value(jarque_bera_p_approx),
+        "normal_like_rule": "true" if normal_like else "false",
+    }
+
+
+def append_residual_diagnostics(output_dir: Path, stats_row: dict[str, str]) -> Path:
+    diagnostics_dir = output_dir / "model_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    path = diagnostics_dir / "residual_distribution_metrics.csv"
+    fieldnames = [
+        "model", "n", "mean_error", "std_error", "median_error",
+        "q05_error", "q25_error", "q75_error", "q95_error",
+        "skewness", "excess_kurtosis", "jarque_bera",
+        "jarque_bera_p_approx", "normal_like_rule",
+    ]
+    write_header = not path.exists()
+    with path.open("a", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(stats_row)
+    return path
+
+
+def plot_prediction_diagnostics(
+    output_dir: Path,
+    model_name: str,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+) -> list[Path]:
+    diagnostics_dir = output_dir / "model_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    valid = np.isfinite(y_true) & np.isfinite(y_pred)
+    y_true = y_true[valid]
+    y_pred = y_pred[valid]
+    if len(y_true) == 0:
+        return []
+
+    slug = safe_plot_name(model_name)
+    residual = y_true - y_pred
+    stats_row = residual_distribution_stats(model_name, residual)
+    append_residual_diagnostics(output_dir, stats_row)
+
+    error_path = diagnostics_dir / f"{slug}_error_distribution.png"
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    counts, bins, _patches = ax.hist(residual, bins=80, color="#4c78a8", alpha=0.85)
+    mean = float(stats_row.get("mean_error", "") or "nan")
+    std = float(stats_row.get("std_error", "") or "nan")
+    if math.isfinite(mean) and math.isfinite(std) and std > 0 and len(bins) > 1:
+        xs = np.linspace(float(bins[0]), float(bins[-1]), 300)
+        bin_width = float(bins[1] - bins[0])
+        ys = len(residual) * bin_width * (1.0 / (std * math.sqrt(2.0 * math.pi))) * np.exp(-0.5 * ((xs - mean) / std) ** 2)
+        ax.plot(xs, ys, color="#f58518", linewidth=1.6, label="Normal de referencia")
+        ax.legend(loc="best", fontsize=8)
+    ax.axvline(0.0, color="black", linewidth=1.0)
+    ax.set_title(f"Distribuicao do erro - {model_name}")
+    ax.set_xlabel("Erro (real - predito)")
+    ax.set_ylabel("Frequencia")
+    fig.tight_layout()
+    fig.savefig(error_path, dpi=150)
+    plt.close(fig)
+
+    qq_path = diagnostics_dir / f"{slug}_error_qq_normal.png"
+    sample = diagnostic_sample_indices(len(residual))
+    sample_residual = np.sort(residual[sample])
+    if len(sample_residual) >= 3:
+        probabilities = (np.arange(1, len(sample_residual) + 1) - 0.5) / len(sample_residual)
+        normal = NormalDist()
+        theoretical = np.asarray([normal.inv_cdf(float(p)) for p in probabilities], dtype=float)
+        if math.isfinite(std) and std > 0:
+            theoretical = mean + std * theoretical
+        min_value = float(min(np.min(theoretical), np.min(sample_residual)))
+        max_value = float(max(np.max(theoretical), np.max(sample_residual)))
+        fig, ax = plt.subplots(figsize=(5.8, 5.8))
+        ax.scatter(theoretical, sample_residual, s=7, alpha=0.18, color="#4c78a8", edgecolors="none")
+        ax.plot([min_value, max_value], [min_value, max_value], color="black", linewidth=1.0)
+        ax.set_title(f"QQ plot do erro - {model_name}")
+        ax.set_xlabel("Quantis esperados se normal")
+        ax.set_ylabel("Quantis observados do erro")
+        fig.tight_layout()
+        fig.savefig(qq_path, dpi=150)
+        plt.close(fig)
+
+    scatter_path = diagnostics_dir / f"{slug}_predicted_vs_actual.png"
+    sample = diagnostic_sample_indices(len(y_true))
+    sampled_true = y_true[sample]
+    sampled_pred = y_pred[sample]
+    min_value = float(min(np.min(sampled_true), np.min(sampled_pred)))
+    max_value = float(max(np.max(sampled_true), np.max(sampled_pred)))
+
+    fig, ax = plt.subplots(figsize=(5.8, 5.8))
+    ax.scatter(sampled_true, sampled_pred, s=7, alpha=0.18, color="#2f7f7f", edgecolors="none")
+    ax.plot([min_value, max_value], [min_value, max_value], color="black", linewidth=1.0)
+    ax.set_title(f"Real x predito - {model_name}")
+    ax.set_xlabel("Valor real")
+    ax.set_ylabel("Valor predito")
+    fig.tight_layout()
+    fig.savefig(scatter_path, dpi=150)
+    plt.close(fig)
+
+    return [error_path, qq_path, scatter_path]
+
+
 class CorrelationStats:
     def __init__(self) -> None:
         self.n = 0
@@ -743,13 +904,14 @@ class CorrelationStats:
 
 
 class SequenceDependencyStats:
-    def __init__(self) -> None:
+    def __init__(self, max_lag: int = DEPENDENCY_MAX_LAG) -> None:
         self.n = 0
         self.sum_y = 0.0
         self.sum_y2 = 0.0
         self.diff2 = 0.0
-        self.lag1 = CorrelationStats()
-        self._previous: float | None = None
+        self.max_lag = max_lag
+        self.lag_stats = {lag: CorrelationStats() for lag in range(1, max_lag + 1)}
+        self._history: list[float] = []
 
     def add(self, value: float) -> None:
         if not math.isfinite(value):
@@ -757,16 +919,22 @@ class SequenceDependencyStats:
         self.n += 1
         self.sum_y += value
         self.sum_y2 += value * value
-        if self._previous is not None:
-            self.diff2 += (value - self._previous) ** 2
-            self.lag1.add(self._previous, value)
-        self._previous = value
+        if self._history:
+            self.diff2 += (value - self._history[-1]) ** 2
+        for lag in range(1, min(self.max_lag, len(self._history)) + 1):
+            self.lag_stats[lag].add(self._history[-lag], value)
+        self._history.append(value)
+        if len(self._history) > self.max_lag:
+            self._history.pop(0)
 
     def reset_group(self) -> None:
-        self._previous = None
+        self._history = []
 
     def lag1_acf(self) -> float:
-        return self.lag1.pearson()
+        return self.lag_stats[1].pearson()
+
+    def acf_rows(self) -> list[tuple[int, float, int]]:
+        return [(lag, stats.pearson(), stats.n) for lag, stats in self.lag_stats.items()]
 
     def durbin_watson(self) -> float:
         if self.n < 3:
@@ -813,6 +981,16 @@ def write_dependency_metrics(
             "value": metric_value(value),
             "n": str(sequence_stats.n),
         })
+    for lag, value, count in sequence_stats.acf_rows():
+        rows.append({
+            "category": "temporal",
+            "metric": "autocorrelation",
+            "series": target,
+            "feature": "",
+            "lag": str(lag),
+            "value": metric_value(value),
+            "n": str(count),
+        })
     for feature, stats in feature_stats.items():
         value = stats.pearson()
         rows.append({
@@ -830,12 +1008,17 @@ def write_dependency_metrics(
         writer.writeheader()
         writer.writerows(rows)
     plot_dependency_feature_pearson(output_dir, target, rows)
+    plot_dependency_acf(output_dir, target, rows)
     return path
 
 
 def plot_dependency_feature_pearson(output_dir: Path, target: str, rows: list[dict[str, str]]) -> Path:
     path = output_dir / "dependency_feature_pearson.png"
-    pairs = [(row["feature"], float(row["value"])) for row in rows if row["value"]]
+    pairs = [
+        (row["feature"], float(row["value"]))
+        for row in rows
+        if row.get("category") == "feature_target" and row.get("feature") and row.get("value")
+    ]
     pairs = pairs[:20]
     if not pairs:
         return path
@@ -857,9 +1040,43 @@ def plot_dependency_feature_pearson(output_dir: Path, target: str, rows: list[di
     return path
 
 
+def plot_dependency_acf(output_dir: Path, target: str, rows: list[dict[str, str]]) -> Path:
+    path = output_dir / "dependency_acf.png"
+    pairs: list[tuple[int, float]] = []
+    for row in rows:
+        if row.get("category") != "temporal" or row.get("metric") != "autocorrelation":
+            continue
+        try:
+            lag = int(row.get("lag", ""))
+            value = float(row.get("value", ""))
+        except ValueError:
+            continue
+        if math.isfinite(value):
+            pairs.append((lag, value))
+    pairs.sort()
+    if not pairs:
+        return path
+
+    lags = [lag for lag, _value in pairs]
+    values = [value for _lag, value in pairs]
+    fig, ax = plt.subplots(figsize=(8, 4.2))
+    ax.plot(lags, values, marker="o", linewidth=1.4, markersize=3.5, color="#4c78a8")
+    ax.axhline(0.0, color="black", linewidth=0.8)
+    ax.set_title(f"Autocorrelacao por lag - {target}")
+    ax.set_xlabel("Lag")
+    ax.set_ylabel("Autocorrelacao")
+    ax.set_ylim(-1.05, 1.05)
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def existing_dependency_result(paths: list[Path], target: str, output_dir: Path) -> dict[str, str] | None:
     metrics_path = output_dir / "dependency_metrics.csv"
     feature_plot = output_dir / "dependency_feature_pearson.png"
+    acf_plot = output_dir / "dependency_acf.png"
     if not metrics_path.exists():
         return None
     values = {
@@ -869,9 +1086,12 @@ def existing_dependency_result(paths: list[Path], target: str, output_dir: Path)
         "dependency_effective_sample_ratio_lag1": "",
     }
     rows_used = ""
+    has_multilag_acf = False
+    metrics_rows: list[dict[str, str]] = []
     try:
         with metrics_path.open("r", encoding="utf-8", newline="") as file:
-            for row in csv.DictReader(file):
+            metrics_rows = list(csv.DictReader(file))
+            for row in metrics_rows:
                 if row.get("category") != "temporal" or row.get("series") != target:
                     continue
                 metric = row.get("metric", "")
@@ -884,16 +1104,17 @@ def existing_dependency_result(paths: list[Path], target: str, output_dir: Path)
                     values["dependency_durbin_watson"] = row.get("value", "")
                 elif metric == "effective_sample_size_ratio_lag1":
                     values["dependency_effective_sample_ratio_lag1"] = row.get("value", "")
+                elif metric == "autocorrelation" and row.get("lag") not in ("", "1"):
+                    has_multilag_acf = True
     except (OSError, csv.Error):
         return None
-    if not all(values.values()):
+    if not all(values.values()) or not has_multilag_acf:
         return None
-    if not feature_plot.exists():
-        try:
-            with metrics_path.open("r", encoding="utf-8", newline="") as file:
-                plot_dependency_feature_pearson(output_dir, target, list(csv.DictReader(file)))
-        except (OSError, csv.Error):
-            pass
+    try:
+        plot_dependency_feature_pearson(output_dir, target, metrics_rows)
+        plot_dependency_acf(output_dir, target, metrics_rows)
+    except (OSError, csv.Error):
+        pass
     return {
         "source_files": str(len(paths)),
         "rows_loaded": rows_used,
@@ -911,6 +1132,7 @@ def existing_dependency_result(paths: list[Path], target: str, output_dir: Path)
         "models_dir": "",
         "dependency_metrics_csv": str(metrics_path),
         "dependency_feature_plot": str(feature_plot),
+        "dependency_acf_plot": str(acf_plot),
         "dependency_cached": "true",
         **values,
     }
@@ -968,6 +1190,7 @@ def dependency_only_result(paths: list[Path], target: str, output_dir: Path, use
         "models_dir": "",
         "dependency_metrics_csv": str(metrics_path),
         "dependency_feature_plot": str(output_dir / "dependency_feature_pearson.png"),
+        "dependency_acf_plot": str(output_dir / "dependency_acf.png"),
         "dependency_cached": "false",
         "dependency_lag1_autocorrelation": metric_value(lag1_acf),
         "dependency_abs_lag1_autocorrelation": metric_value(abs_lag1_acf),
@@ -985,6 +1208,9 @@ def train_and_plot(
     output_dir.mkdir(parents=True, exist_ok=True)
     models_dir = output_dir / "trained_models"
     models_dir.mkdir(parents=True, exist_ok=True)
+    residual_metrics_path = output_dir / "model_diagnostics" / "residual_distribution_metrics.csv"
+    if residual_metrics_path.exists():
+        residual_metrics_path.unlink()
 
     if not paths:
         raise SystemExit("Nenhum CSV de resultados encontrado.")
@@ -1049,6 +1275,7 @@ def train_and_plot(
     def add_result(display_name: str, prediction: np.ndarray | None) -> None:
         if prediction is not None:
             results.append({"model": display_name, **metrics(test_y, prediction)})
+            plot_prediction_diagnostics(output_dir, display_name, test_y, prediction)
 
     lr_model, lr_pred = fit_or_resume(
         "linear_regression",
@@ -1247,6 +1474,7 @@ def train_and_plot(
         "rmse_plot": str(plot_paths[1]),
         "r2_plot": str(plot_paths[2]),
         "models_dir": str(models_dir),
+        "model_diagnostics_dir": str(output_dir / "model_diagnostics"),
     }
 
 
@@ -1287,7 +1515,8 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
     fieldnames = [
         "label", "target", "source_files", "rows_loaded", "rows_used", "train_rows", "test_rows",
         "best_model", "best_mae", "best_rmse", "best_r2", "metrics_csv", "mae_plot", "rmse_plot",
-        "r2_plot", "models_dir", "dependency_metrics_csv", "dependency_feature_plot",
+        "r2_plot", "models_dir", "model_diagnostics_dir", "dependency_metrics_csv", "dependency_feature_plot",
+        "dependency_acf_plot",
         "dependency_cached",
         "dependency_lag1_autocorrelation", "dependency_abs_lag1_autocorrelation",
         "dependency_durbin_watson", "dependency_effective_sample_ratio_lag1",

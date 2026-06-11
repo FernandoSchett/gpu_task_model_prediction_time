@@ -124,4 +124,4 @@ for run in config.get("runs", []):
 PY
 )
 
-python3 scripts/analyze_slowdown.py
+python3 scripts/py_outros/A0_analisar_slowdown.py
