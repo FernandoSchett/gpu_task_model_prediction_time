@@ -17,6 +17,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "sim"}
+
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 REGRESSOR_SCRIPT = SCRIPT_DIR / "A2_regressores_classicos.py"
@@ -45,23 +52,64 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-fraction", type=float, default=0.25)
     parser.add_argument("--sequence-length", type=int, default=int(os.getenv("SEQUENCE_LENGTH", "16")))
-    parser.add_argument("--sequence-stride", type=int, default=int(os.getenv("SEQUENCE_STRIDE", "4")))
+    parser.add_argument("--sequence-stride", type=int, default=int(os.getenv("SEQUENCE_STRIDE", "1")))
     parser.add_argument("--max-sequences", type=int, default=int(os.getenv("SEQUENCE_MAX_SEQUENCES", "200000")))
     parser.add_argument("--epochs", type=int, default=int(os.getenv("SEQUENCE_EPOCHS", "5")))
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("SEQUENCE_BATCH_SIZE", "256")))
+    parser.add_argument(
+        "--split-mode",
+        choices=("random", "chronological"),
+        default=os.getenv("SEQUENCE_SPLIT_MODE", "random"),
+        help="Use random to compare with classical regressors, chronological to test temporal generalization.",
+    )
+    parser.add_argument(
+        "--sample-mode",
+        choices=("random", "linspace"),
+        default=os.getenv("SEQUENCE_SAMPLE_MODE", "random"),
+        help="How to downsample sequence windows when --max-sequences is reached.",
+    )
+    parser.add_argument(
+        "--tf-device",
+        choices=("cpu", "auto"),
+        default=os.getenv("SEQUENCE_TF_DEVICE", "auto"),
+        help="Use cpu to avoid TensorFlow CUDA probing, or auto to let TensorFlow choose.",
+    )
+    parser.add_argument(
+        "--require-gpu",
+        action=argparse.BooleanOptionalAction,
+        default=env_flag("SEQUENCE_REQUIRE_GPU", True),
+        help="Fail if --tf-device auto does not expose a TensorFlow GPU.",
+    )
     parser.add_argument("--no-cache", action="store_true", help="Recompute even when sequential outputs already exist.")
     return parser.parse_args()
 
 
-def import_tensorflow():
+def import_tensorflow(tf_device: str, require_gpu: bool):
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    if tf_device == "cpu":
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
     try:
         import tensorflow as tf
         from tensorflow import keras
     except ImportError as exc:
         raise SystemExit(
-            "TensorFlow nao esta instalado. Instale com `pip install tensorflow` "
-            "ou adicione tensorflow ao ambiente antes de rodar a pipeline A."
+            "TensorFlow nao esta instalado. Instale com "
+            "`python3 -m pip install 'tensorflow[and-cuda]'` "
+            "ou rode `bash scripts/configurar_tensorflow_gpu.sh` antes da pipeline A."
         ) from exc
+    if tf_device == "auto":
+        gpus = tf.config.list_physical_devices("GPU")
+        if require_gpu and not gpus:
+            raise SystemExit(
+                "TensorFlow foi importado, mas nao encontrou GPU. Rode:\n"
+                "  bash scripts/configurar_tensorflow_gpu.sh\n"
+                "Depois confirme com:\n"
+                "  python3 -c \"import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))\"\n"
+                "Se quiser rodar temporariamente em CPU, use SEQUENCE_TF_DEVICE=cpu "
+                "ou passe --tf-device cpu."
+            )
+        if gpus:
+            print("TensorFlow GPUs:", ", ".join(device.name for device in gpus))
     return tf, keras
 
 
@@ -96,6 +144,8 @@ def make_sequences(
     sequence_length: int,
     stride: int,
     max_sequences: int,
+    seed: int,
+    sample_mode: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     if sequence_length < 2:
         raise SystemExit("--sequence-length precisa ser >= 2.")
@@ -106,7 +156,11 @@ def make_sequences(
         return np.empty((0, sequence_length, x.shape[1]), dtype=float), np.empty((0,), dtype=float)
     indices = np.arange(0, count * stride, stride, dtype=int)
     if max_sequences > 0 and len(indices) > max_sequences:
-        indices = np.linspace(0, indices[-1], num=max_sequences, dtype=int)
+        if sample_mode == "random":
+            rng = np.random.default_rng(seed)
+            indices = np.sort(rng.choice(indices, size=max_sequences, replace=False))
+        else:
+            indices = np.linspace(0, indices[-1], num=max_sequences, dtype=int)
     seq_x = np.empty((len(indices), sequence_length, x.shape[1]), dtype=np.float32)
     seq_y = np.empty((len(indices),), dtype=np.float32)
     for out_index, start in enumerate(indices):
@@ -128,6 +182,37 @@ def chronological_split(
     if split <= 0:
         raise SystemExit("Poucas sequencias para criar treino/teste.")
     return x[:split], x[split:], y[:split], y[split:]
+
+
+def random_split(
+    x: np.ndarray,
+    y: np.ndarray,
+    test_fraction: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if not 0.0 < test_fraction < 1.0:
+        raise SystemExit("--test-fraction precisa estar entre 0 e 1.")
+    indices = np.arange(len(y))
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+    test_size = max(1, int(round(len(indices) * test_fraction)))
+    test_idx = indices[:test_size]
+    train_idx = indices[test_size:]
+    if len(train_idx) == 0:
+        raise SystemExit("Poucas sequencias para criar treino/teste.")
+    return x[train_idx], x[test_idx], y[train_idx], y[test_idx]
+
+
+def split_sequences(
+    x: np.ndarray,
+    y: np.ndarray,
+    test_fraction: float,
+    seed: int,
+    split_mode: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if split_mode == "random":
+        return random_split(x, y, test_fraction, seed)
+    return chronological_split(x, y, test_fraction)
 
 
 def standardize_sequence(
@@ -189,7 +274,7 @@ def write_metrics(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "model", "MAE", "RMSE", "R2", "train_sequences", "test_sequences",
-        "sequence_length", "sequence_stride", "diagnostics_dir",
+        "sequence_length", "sequence_stride", "split_mode", "sample_mode", "diagnostics_dir",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
@@ -219,6 +304,8 @@ def expected_metadata(args: argparse.Namespace, job: dict[str, str], paths: list
         "sequence_stride": args.sequence_stride,
         "max_sequences": args.max_sequences,
         "test_fraction": args.test_fraction,
+        "split_mode": args.split_mode,
+        "sample_mode": args.sample_mode,
         "features": FEATURES,
     }
 
@@ -292,10 +379,24 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             return cached
 
     x, y = load_ordered_matrix(paths, job["target"])
-    seq_x, seq_y = make_sequences(x, y, args.sequence_length, args.sequence_stride, args.max_sequences)
+    seq_x, seq_y = make_sequences(
+        x,
+        y,
+        args.sequence_length,
+        args.sequence_stride,
+        args.max_sequences,
+        args.seed,
+        args.sample_mode,
+    )
     if len(seq_y) == 0:
         raise SystemExit(f"Nenhuma sequencia valida para {job['label']} {job['target']}.")
-    train_x, test_x, train_y, test_y = chronological_split(seq_x, seq_y, args.test_fraction)
+    train_x, test_x, train_y, test_y = split_sequences(
+        seq_x,
+        seq_y,
+        args.test_fraction,
+        args.seed,
+        args.split_mode,
+    )
     train_x, test_x, mean, scale = standardize_sequence(train_x, test_x)
 
     metadata = {
@@ -338,6 +439,8 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             "test_sequences": str(len(test_y)),
             "sequence_length": str(args.sequence_length),
             "sequence_stride": str(args.sequence_stride),
+            "split_mode": args.split_mode,
+            "sample_mode": args.sample_mode,
             "diagnostics_dir": str(diagnostics_dir),
         })
 
@@ -363,7 +466,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
 
 def main() -> int:
     args = parse_args()
-    tf, keras = import_tensorflow()
+    tf, keras = import_tensorflow(args.tf_device, args.require_gpu)
     tf.keras.utils.set_random_seed(args.seed)
     rows = [run_job(args, job, keras) for job in load_jobs(args.jobs_file)]
     summary_path = args.analysis_dir / "sequential_summary.csv"

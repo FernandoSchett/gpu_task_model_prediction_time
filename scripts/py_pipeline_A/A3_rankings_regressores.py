@@ -125,7 +125,21 @@ def short_label(row: dict[str, str]) -> str:
     return f"{condition}:{row['label']}"
 
 
-def plot_target_rankings(output_dir: Path, rows: list[dict[str, str]], top_n: int) -> None:
+def family_title(model_family: str | None) -> str:
+    if model_family == "classical":
+        return "modelos nao sequenciais"
+    if model_family == "sequential":
+        return "modelos sequenciais"
+    return "todos os modelos"
+
+
+def plot_target_rankings(
+    output_dir: Path,
+    rows: list[dict[str, str]],
+    top_n: int,
+    model_family: str | None = None,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     for target in TARGETS:
         target_rows = [row for row in rows if row["target"] == target]
         target_rows.sort(key=lambda row: (float(row["best_r2"]), -float(row["best_rmse"])), reverse=True)
@@ -141,7 +155,7 @@ def plot_target_rankings(output_dir: Path, rows: list[dict[str, str]], top_n: in
         ax.set_yticklabels(labels, fontsize=8)
         ax.invert_yaxis()
         ax.set_xlabel("R2 do melhor modelo")
-        ax.set_title(f"Top {len(target_rows)} recortes onde os modelos predizem melhor - {target}")
+        ax.set_title(f"Top {len(target_rows)} recortes onde {family_title(model_family)} predizem melhor - {target}")
         ax.axvline(0.0, color="black", linewidth=0.8)
         for index, row in enumerate(target_rows):
             value = float(row["best_r2"])
@@ -159,7 +173,8 @@ def plot_target_rankings(output_dir: Path, rows: list[dict[str, str]], top_n: in
         plt.close(fig)
 
 
-def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]]) -> None:
+def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]], model_family: str | None = None) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     grouped: dict[tuple[str, str], list[float]] = {}
     for row in rows:
         grouped.setdefault((row["condition"], row["target"]), []).append(float(row["best_r2"]))
@@ -179,7 +194,7 @@ def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]]) -> Non
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=8)
     ax.set_ylabel("R2 medio do melhor modelo por recorte")
-    ax.set_title("Comparacao geral de previsibilidade por condicao")
+    ax.set_title(f"Comparacao geral de previsibilidade por condicao - {family_title(model_family)}")
     ax.axhline(0.0, color="black", linewidth=0.8)
     for index, value in enumerate(values):
         ax.text(index, value, f"{value:.3f}", ha="center", va="bottom", fontsize=8)
@@ -188,14 +203,26 @@ def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]]) -> Non
     plt.close(fig)
 
 
+def write_outputs(output_dir: Path, rows: list[dict[str, str]], top_n: int, model_family: str | None = None) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_rankings_csv(output_dir / "best_model_rankings.csv", rows)
+    plot_target_rankings(output_dir, rows, top_n, model_family)
+    plot_condition_overview(output_dir, rows, model_family)
+
+
 def main() -> int:
     args = parse_args()
-    rows = load_rows(args.analysis_root)
     output_dir = args.analysis_root
-    write_rankings_csv(output_dir / "best_model_rankings.csv", rows)
-    plot_target_rankings(output_dir, rows, args.top_n)
-    plot_condition_overview(output_dir, rows)
+    classical_rows = load_classical_rows(args.analysis_root)
+    sequential_rows = load_sequential_rows(args.analysis_root)
+    rows = load_rows(args.analysis_root)
+
+    write_outputs(output_dir / "melhores_modelos_nao_sequenciais", classical_rows, args.top_n, "classical")
+    write_outputs(output_dir / "melhores_modelos_sequenciais", sequential_rows, args.top_n, "sequential")
+    write_outputs(output_dir, rows, args.top_n, None)
     print(f"rankings_csv: {output_dir / 'best_model_rankings.csv'}")
+    print(f"classical_rankings_csv: {output_dir / 'melhores_modelos_nao_sequenciais' / 'best_model_rankings.csv'}")
+    print(f"sequential_rankings_csv: {output_dir / 'melhores_modelos_sequenciais' / 'best_model_rankings.csv'}")
     print(f"plots_dir: {output_dir}")
     return 0
 

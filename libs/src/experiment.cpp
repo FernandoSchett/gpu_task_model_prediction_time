@@ -31,6 +31,7 @@ constexpr std::uint64_t kWarmupSeedSalt = 0x9E3779B97F4A7C15ULL;
 struct ExperimentRuntimeState {
     std::atomic<std::uint64_t> rank_submitted_count{0};
     std::atomic<std::uint64_t> rank_completed_count{0};
+    std::atomic<std::int64_t> rank_last_submit_time_ns{0};
     std::atomic<std::int64_t> measurement_start_ns{0};
 };
 
@@ -248,6 +249,7 @@ void run_host_thread(const ExperimentConfig &config,
                      int host_thread_id,
                      const DeviceInfo &device_info,
                      CsvWriter &writer,
+                     GpuTelemetryMonitor &gpu_telemetry,
                      ExperimentRuntimeState &runtime_state,
                      MeasurementStartBarrier &measurement_start_barrier,
                      std::vector<std::string> &thread_errors,
@@ -312,6 +314,17 @@ void run_host_thread(const ExperimentConfig &config,
                     runtime_state.rank_completed_count.load(std::memory_order_acquire);
                 const std::uint64_t submitted_before_rank =
                     runtime_state.rank_submitted_count.fetch_add(1, std::memory_order_acq_rel);
+                const std::int64_t previous_submit_time_ns =
+                    runtime_state.rank_last_submit_time_ns.exchange(submit_time_ns,
+                                                                     std::memory_order_acq_rel);
+                const double time_since_previous_submit_us =
+                    previous_submit_time_ns > 0
+                        ? static_cast<double>(submit_time_ns - previous_submit_time_ns) / 1000.0
+                        : -1.0;
+                const std::uint64_t backlog_at_launch =
+                    submitted_before_rank >= completed_before_rank
+                        ? submitted_before_rank - completed_before_rank
+                        : 0;
 
                 cudaError_t final_error = cudaEventRecord(start_event, stream);
                 if (final_error == cudaSuccess) {
@@ -374,6 +387,7 @@ void run_host_thread(const ExperimentConfig &config,
                         : 0.0;
                 const double response_time_us =
                     static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
+                const GpuTelemetrySnapshot telemetry_snapshot = gpu_telemetry.latest_snapshot();
 
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
@@ -390,6 +404,9 @@ void run_host_thread(const ExperimentConfig &config,
                                                                     mpi_rank,
                                                                     host_thread_id,
                                                                     kernel_index);
+                record.execution_order = submitted_before_rank;
+                record.repetition_id = config.repetition_id != 0 ? config.repetition_id : config.seed;
+                record.block_id = config.block_id;
                 record.cuda_device_id = config.device_id;
                 record.arrival_wait_ms = arrival_wait_ms;
                 record.requested_busy_wait_us = requested_busy_wait_us;
@@ -418,8 +435,18 @@ void run_host_thread(const ExperimentConfig &config,
                 record.measurement_start_time_ns = measurement_start_ns;
                 record.time_since_experiment_start_us =
                     static_cast<double>(submit_time_ns - measurement_start_ns) / 1000.0;
+                record.time_since_previous_submit_us = time_since_previous_submit_us;
                 record.rank_local_submitted_count = submitted_before_rank;
                 record.rank_local_completed_count = completed_before_rank;
+                record.rank_local_backlog_at_launch = backlog_at_launch;
+                record.gpu_clock_sm_mhz = telemetry_snapshot.gpu_clock_sm_mhz;
+                record.gpu_clock_mem_mhz = telemetry_snapshot.gpu_clock_mem_mhz;
+                record.gpu_temperature_c = telemetry_snapshot.temperature_c;
+                record.gpu_power_w = telemetry_snapshot.power_w;
+                record.gpu_power_limit_w = telemetry_snapshot.power_limit_w;
+                record.gpu_sm_utilization_percent = telemetry_snapshot.gpu_utilization;
+                record.gpu_memory_utilization_percent = telemetry_snapshot.memory_utilization;
+                record.gpu_telemetry_status = telemetry_snapshot.status;
                 record.submit_time_ns = submit_time_ns;
                 record.launch_return_time_ns = launch_return_time_ns;
                 record.completion_time_ns = completion_time_ns;
@@ -571,6 +598,7 @@ void run_experiment(const ExperimentConfig &config,
                              host_thread_id,
                              std::cref(device_info),
                              std::ref(writer),
+                             std::ref(gpu_telemetry),
                              std::ref(runtime_state),
                              std::ref(measurement_start_barrier),
                              std::ref(thread_errors),

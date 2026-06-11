@@ -49,6 +49,9 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "kernel_index_in_thread,"
           << "thread_local_kernel_index,"
           << "global_kernel_id,"
+          << "execution_order,"
+          << "repetition_id,"
+          << "block_id,"
           << "cuda_device_id,"
           << "arrival_wait_ms,"
           << "requested_busy_wait_us,"
@@ -76,8 +79,18 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "logical_stream_id,"
           << "measurement_start_time_ns,"
           << "time_since_experiment_start_us,"
+          << "time_since_previous_submit_us,"
           << "rank_local_submitted_count,"
           << "rank_local_completed_count,"
+          << "rank_local_backlog_at_launch,"
+          << "gpu_clock_sm_mhz,"
+          << "gpu_clock_mem_mhz,"
+          << "gpu_temperature_c,"
+          << "gpu_power_w,"
+          << "gpu_power_limit_w,"
+          << "gpu_sm_utilization_percent,"
+          << "gpu_memory_utilization_percent,"
+          << "gpu_telemetry_status,"
           << "submit_time_ns,"
           << "launch_return_time_ns,"
           << "completion_time_ns,"
@@ -106,6 +119,9 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.kernel_index_in_thread << ','
           << record.thread_local_kernel_index << ','
           << record.global_kernel_id << ','
+          << record.execution_order << ','
+          << record.repetition_id << ','
+          << record.block_id << ','
           << record.cuda_device_id << ','
           << std::fixed << std::setprecision(6) << record.arrival_wait_ms << ','
           << record.requested_busy_wait_us << ','
@@ -133,8 +149,18 @@ void CsvWriter::write(const KernelRecord &record) {
           << record.logical_stream_id << ','
           << record.measurement_start_time_ns << ','
           << std::fixed << std::setprecision(3) << record.time_since_experiment_start_us << ','
+          << std::fixed << std::setprecision(3) << record.time_since_previous_submit_us << ','
           << record.rank_local_submitted_count << ','
           << record.rank_local_completed_count << ','
+          << record.rank_local_backlog_at_launch << ','
+          << csv_escape(record.gpu_clock_sm_mhz) << ','
+          << csv_escape(record.gpu_clock_mem_mhz) << ','
+          << csv_escape(record.gpu_temperature_c) << ','
+          << csv_escape(record.gpu_power_w) << ','
+          << csv_escape(record.gpu_power_limit_w) << ','
+          << csv_escape(record.gpu_sm_utilization_percent) << ','
+          << csv_escape(record.gpu_memory_utilization_percent) << ','
+          << csv_escape(record.gpu_telemetry_status) << ','
           << record.submit_time_ns << ','
           << record.launch_return_time_ns << ','
           << record.completion_time_ns << ','

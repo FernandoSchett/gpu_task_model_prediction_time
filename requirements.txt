@@ -10,7 +10,7 @@ xgboost>=1.7.0
 catboost>=1.1.0
 
 # Pipeline A: sequential models (LSTM, GRU, Temporal CNN)
-tensorflow>=2.12.0
+tensorflow[and-cuda]>=2.16.0
 
 # Pipeline B: extreme value analysis (GEV/GPD)
 scipy>=1.10.0

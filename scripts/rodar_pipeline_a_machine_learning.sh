@@ -18,11 +18,16 @@ PRESERVED_ENV_VARS=(
   DEPENDENCY_CACHE
   PIPELINE_A_CLASSICAL
   PIPELINE_A_SEQUENTIAL
+  PYTHON_BIN
   SEQUENCE_LENGTH
   SEQUENCE_STRIDE
   SEQUENCE_MAX_SEQUENCES
   SEQUENCE_EPOCHS
   SEQUENCE_BATCH_SIZE
+  SEQUENCE_SPLIT_MODE
+  SEQUENCE_SAMPLE_MODE
+  SEQUENCE_TF_DEVICE
+  SEQUENCE_REQUIRE_GPU
   SEQUENCE_CACHE
   SEED
 )
@@ -59,11 +64,22 @@ DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
 DEPENDENCY_CACHE="${DEPENDENCY_CACHE:-true}"
 PIPELINE_A_CLASSICAL="${PIPELINE_A_CLASSICAL:-true}"
 PIPELINE_A_SEQUENTIAL="${PIPELINE_A_SEQUENTIAL:-true}"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 SEQUENCE_LENGTH="${SEQUENCE_LENGTH:-16}"
-SEQUENCE_STRIDE="${SEQUENCE_STRIDE:-4}"
+SEQUENCE_STRIDE="${SEQUENCE_STRIDE:-1}"
 SEQUENCE_MAX_SEQUENCES="${SEQUENCE_MAX_SEQUENCES:-200000}"
 SEQUENCE_EPOCHS="${SEQUENCE_EPOCHS:-5}"
 SEQUENCE_BATCH_SIZE="${SEQUENCE_BATCH_SIZE:-256}"
+SEQUENCE_SPLIT_MODE="${SEQUENCE_SPLIT_MODE:-random}"
+SEQUENCE_SAMPLE_MODE="${SEQUENCE_SAMPLE_MODE:-random}"
+SEQUENCE_TF_DEVICE="${SEQUENCE_TF_DEVICE:-auto}"
+SEQUENCE_REQUIRE_GPU="${SEQUENCE_REQUIRE_GPU:-true}"
 SEQUENCE_CACHE="${SEQUENCE_CACHE:-true}"
 SEED="${SEED:-42}"
 SEQUENCE_CACHE_ARGS=()
@@ -108,14 +124,14 @@ run_one() {
     exit 1
   fi
 
-  python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
+  "${PYTHON_BIN}" scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
     --results-dir ${results_dirs} \
     --analysis-dir "${analysis_dir}" \
     --targets ${TARGETS} \
     --gpu-targets ${GPU_TARGETS}
 
   if [[ "${PIPELINE_A_CLASSICAL}" == "true" ]] || [[ "${PIPELINE_A_CLASSICAL}" == "1" ]]; then
-    python3 scripts/py_pipeline_A/A2_regressores_classicos.py \
+    "${PYTHON_BIN}" scripts/py_pipeline_A/A2_regressores_classicos.py \
       compare \
       --results-dir ${results_dirs} \
       --analysis-dir "${analysis_dir}" \
@@ -125,11 +141,11 @@ run_one() {
       "${CLASSICAL_COMPARE_ARGS[@]}"
 
     if [[ -f "scripts/py_pipeline_A/A3_rankings_regressores.py" ]]; then
-      python3 scripts/py_pipeline_A/A3_rankings_regressores.py --analysis-root "$(dirname "${analysis_dir}")"
+      "${PYTHON_BIN}" scripts/py_pipeline_A/A3_rankings_regressores.py --analysis-root "$(dirname "${analysis_dir}")"
     fi
 
     if [[ ("${DEPENDENCY_ONLY}" == "true" || "${DEPENDENCY_ONLY}" == "1") && -f "scripts/py_pipeline_A/A4_rankings_dependencia.py" ]]; then
-      python3 scripts/py_pipeline_A/A4_rankings_dependencia.py --analysis-root "$(dirname "${analysis_dir}")"
+      "${PYTHON_BIN}" scripts/py_pipeline_A/A4_rankings_dependencia.py --analysis-root "$(dirname "${analysis_dir}")"
     fi
   fi
 
@@ -139,15 +155,25 @@ run_one() {
     SEQUENCE_MAX_SEQUENCES="${SEQUENCE_MAX_SEQUENCES}" \
     SEQUENCE_EPOCHS="${SEQUENCE_EPOCHS}" \
     SEQUENCE_BATCH_SIZE="${SEQUENCE_BATCH_SIZE}" \
-    python3 scripts/py_pipeline_A/A5_modelos_sequenciais.py \
+    SEQUENCE_SPLIT_MODE="${SEQUENCE_SPLIT_MODE}" \
+    SEQUENCE_SAMPLE_MODE="${SEQUENCE_SAMPLE_MODE}" \
+    SEQUENCE_TF_DEVICE="${SEQUENCE_TF_DEVICE}" \
+    SEQUENCE_REQUIRE_GPU="${SEQUENCE_REQUIRE_GPU}" \
+    "${PYTHON_BIN}" scripts/py_pipeline_A/A5_modelos_sequenciais.py \
       --results-dir ${results_dirs} \
       --analysis-dir "${analysis_dir}" \
       --jobs-file "${analysis_dir}/analysis_jobs.csv" \
       --first-sweep \
       --seed "${SEED}" \
+      --split-mode "${SEQUENCE_SPLIT_MODE}" \
+      --sample-mode "${SEQUENCE_SAMPLE_MODE}" \
       "${SEQUENCE_CACHE_ARGS[@]}"
   fi
 }
 
 run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
 run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+
+if [[ -f "scripts/py_pipeline_A/A3_rankings_regressores.py" ]]; then
+  "${PYTHON_BIN}" scripts/py_pipeline_A/A3_rankings_regressores.py --analysis-root "${ANALYSIS_ROOT}"
+fi

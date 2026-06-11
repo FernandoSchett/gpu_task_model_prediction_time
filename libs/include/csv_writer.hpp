@@ -18,6 +18,9 @@ struct KernelRecord {
     int kernel_index_in_thread = 0;
     int thread_local_kernel_index = 0;
     std::uint64_t global_kernel_id = 0;
+    std::uint64_t execution_order = 0;
+    std::uint64_t repetition_id = 0;
+    std::uint64_t block_id = 0;
     int cuda_device_id = 0;
     double arrival_wait_ms = 0.0;
     std::uint64_t requested_busy_wait_us = 0;
@@ -45,8 +48,18 @@ struct KernelRecord {
     int logical_stream_id = 0;
     std::int64_t measurement_start_time_ns = 0;
     double time_since_experiment_start_us = 0.0;
+    double time_since_previous_submit_us = -1.0;
     std::uint64_t rank_local_submitted_count = 0;
     std::uint64_t rank_local_completed_count = 0;
+    std::uint64_t rank_local_backlog_at_launch = 0;
+    std::string gpu_clock_sm_mhz;
+    std::string gpu_clock_mem_mhz;
+    std::string gpu_temperature_c;
+    std::string gpu_power_w;
+    std::string gpu_power_limit_w;
+    std::string gpu_sm_utilization_percent;
+    std::string gpu_memory_utilization_percent;
+    std::string gpu_telemetry_status;
     std::int64_t submit_time_ns = 0;
     std::int64_t launch_return_time_ns = 0;
     std::int64_t completion_time_ns = 0;

@@ -171,6 +171,18 @@ void GpuTelemetryMonitor::sample_once(const std::string &phase) {
         status = "parse-error";
     }
 
+    {
+        std::lock_guard<std::mutex> lock(latest_mutex_);
+        latest_snapshot_.gpu_clock_sm_mhz = values[0];
+        latest_snapshot_.gpu_clock_mem_mhz = values[1];
+        latest_snapshot_.temperature_c = values[2];
+        latest_snapshot_.power_w = values[3];
+        latest_snapshot_.power_limit_w = values[4];
+        latest_snapshot_.gpu_utilization = values[5];
+        latest_snapshot_.memory_utilization = values[6];
+        latest_snapshot_.status = status;
+    }
+
     write_sample(phase, sample_time_ns, status, trim(raw_output), values);
 }
 
@@ -205,6 +217,11 @@ void GpuTelemetryMonitor::stop() {
 
 bool GpuTelemetryMonitor::enabled() const {
     return config_.gpu_telemetry_enabled && file_.is_open();
+}
+
+GpuTelemetrySnapshot GpuTelemetryMonitor::latest_snapshot() const {
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    return latest_snapshot_;
 }
 
 const std::string &GpuTelemetryMonitor::path() const {

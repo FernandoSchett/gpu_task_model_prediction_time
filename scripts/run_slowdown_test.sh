@@ -17,6 +17,8 @@ SLOWDOWN_EXPERIMENT_CONFIG_PATH="${SLOWDOWN_EXPERIMENT_CONFIG_PATH:-experimentos
 GPU_TELEMETRY="${GPU_TELEMETRY:-}"
 GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-}"
 TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-}"
+BLOCK_ID="${BLOCK_ID:-0}"
+REPETITION_ID="${REPETITION_ID:-}"
 
 if [[ ! -f "${SLOWDOWN_EXPERIMENT_CONFIG_PATH}" ]]; then
   echo "Arquivo de configuracao de slowdown nao encontrado: ${SLOWDOWN_EXPERIMENT_CONFIG_PATH}" >&2
@@ -55,6 +57,8 @@ mkdir -p resultados
 echo "Usando configuracao de slowdown: ${SLOWDOWN_EXPERIMENT_CONFIG_PATH}"
 echo "Telemetria GPU: gpu_telemetry=${GPU_TELEMETRY}, gpu_telemetry_during=${GPU_TELEMETRY_DURING}, telemetry_interval_ms=${TELEMETRY_INTERVAL_MS}"
 
+BLOCK_ID_COUNTER="${BLOCK_ID}"
+
 while IFS=$'\t' read -r \
   experiment_name \
   mpi_ranks \
@@ -70,8 +74,12 @@ while IFS=$'\t' read -r \
   seed \
   kernel_type; do
 
+  block_id="${BLOCK_ID_COUNTER}"
+  BLOCK_ID_COUNTER=$((BLOCK_ID_COUNTER + 1))
+  repetition_id="${REPETITION_ID:-${seed}}"
+
   mkdir -p "resultados/${experiment_name}"
-  echo "Running ${experiment_name} -> resultados/${experiment_name}"
+  echo "Running ${experiment_name} -> resultados/${experiment_name} (block_id=${block_id}, repetition_id=${repetition_id})"
   mpirun -np "${mpi_ranks}" ./main \
     --threads-per-process "${threads_per_process}" \
     --kernels-per-thread "${kernels_per_thread}" \
@@ -83,6 +91,8 @@ while IFS=$'\t' read -r \
     --threads-per-block "${threads_per_block}" \
     --grid-z "${grid_z}" \
     --seed "${seed}" \
+    --repetition-id "${repetition_id}" \
+    --block-id "${block_id}" \
     --experiment-name "${experiment_name}" \
     --gpu-telemetry "${GPU_TELEMETRY}" \
     --gpu-telemetry-during "${GPU_TELEMETRY_DURING}" \

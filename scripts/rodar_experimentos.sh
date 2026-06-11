@@ -9,6 +9,8 @@ PRESERVED_ENV_VARS=(
   OUTPUT_DIR
   SWEEP_OUTPUT_DIR
   RUN_TIMESTAMP
+  BLOCK_ID
+  REPETITION_ID
   DEFAULT_DEVICE
   SYNC_MODE
   WARMUP_KERNELS
@@ -165,6 +167,8 @@ echo "Usando configuracao de experimento: ${EXPERIMENT_CONFIG_PATH}"
 echo "Telemetria GPU: gpu_telemetry=${GPU_TELEMETRY}, gpu_telemetry_during=${GPU_TELEMETRY_DURING}, telemetry_interval_ms=${TELEMETRY_INTERVAL_MS}"
 echo "Pasta do sweep: ${SWEEP_OUTPUT_DIR}"
 
+BLOCK_ID_COUNTER="${BLOCK_ID:-0}"
+
 run_experiment_config() {
   local target_gpu_demand_percent="$1"
   local ranks="$2"
@@ -186,8 +190,11 @@ run_experiment_config() {
 
           experiment_name="s${seed}${target_tag}_r${ranks}_t${threads}_k${KERNELS_PER_THREAD}_w${WARMUP_KERNELS}_kt${kernel_type}_bx${blocks_x}_tpb${threads_per_block}_gz${GRID_Z}_ku${kernel_min_us}-${kernel_max_us}_am${arrival_min_ms}-${arrival_max_ms}"
           experiment_output_dir="${SWEEP_OUTPUT_DIR}"
+          block_id="${BLOCK_ID_COUNTER}"
+          BLOCK_ID_COUNTER=$((BLOCK_ID_COUNTER + 1))
+          repetition_id="${REPETITION_ID:-${seed}}"
 
-          echo "Running ${experiment_name} -> ${experiment_output_dir}"
+          echo "Running ${experiment_name} -> ${experiment_output_dir} (block_id=${block_id}, repetition_id=${repetition_id})"
           mpirun -np "${ranks}" ./main \
             --threads-per-process "${threads}" \
             --kernels-per-thread "${KERNELS_PER_THREAD}" \
@@ -204,6 +211,8 @@ run_experiment_config() {
             --threads-per-block "${threads_per_block}" \
             --grid-z "${GRID_Z}" \
             --seed "${seed}" \
+            --repetition-id "${repetition_id}" \
+            --block-id "${block_id}" \
             --experiment-name "${experiment_name}" \
             --output-dir "${SWEEP_OUTPUT_DIR}" \
             --device "${DEFAULT_DEVICE}" \

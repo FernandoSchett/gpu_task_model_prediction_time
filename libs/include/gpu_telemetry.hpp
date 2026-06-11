@@ -10,6 +10,17 @@
 #include <string>
 #include <thread>
 
+struct GpuTelemetrySnapshot {
+    std::string gpu_clock_sm_mhz;
+    std::string gpu_clock_mem_mhz;
+    std::string temperature_c;
+    std::string power_w;
+    std::string power_limit_w;
+    std::string gpu_utilization;
+    std::string memory_utilization;
+    std::string status = "disabled";
+};
+
 class GpuTelemetryMonitor {
 public:
     GpuTelemetryMonitor(const ExperimentConfig &config,
@@ -26,6 +37,7 @@ public:
     void stop();
 
     bool enabled() const;
+    GpuTelemetrySnapshot latest_snapshot() const;
     const std::string &path() const;
 
 private:
@@ -43,6 +55,8 @@ private:
     std::string path_;
     std::ofstream file_;
     std::mutex file_mutex_;
+    mutable std::mutex latest_mutex_;
+    GpuTelemetrySnapshot latest_snapshot_;
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::int64_t monitor_start_ns_ = 0;

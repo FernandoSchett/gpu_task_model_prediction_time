@@ -52,6 +52,14 @@ void apply_env_defaults(const EnvMap &env, ExperimentConfig &config, std::string
         error = "Invalid SEED value in .env";
         return;
     }
+    if (!env_to_uint64(env, "REPETITION_ID", config.repetition_id)) {
+        error = "Invalid REPETITION_ID value in .env";
+        return;
+    }
+    if (!env_to_uint64(env, "BLOCK_ID", config.block_id)) {
+        error = "Invalid BLOCK_ID value in .env";
+        return;
+    }
     if (!env_to_int(env, "DEFAULT_DEVICE", config.device_id)) {
         error = "Invalid DEFAULT_DEVICE value in .env";
         return;
@@ -306,6 +314,18 @@ bool parse_command_line(int argc,
                 error = error.empty() ? "Invalid value for --seed" : error;
                 return false;
             }
+        } else if (arg == "--repetition-id") {
+            if (!require_value(argc, argv, i, value, error) ||
+                !parse_uint64_value(value, config.repetition_id)) {
+                error = error.empty() ? "Invalid value for --repetition-id" : error;
+                return false;
+            }
+        } else if (arg == "--block-id") {
+            if (!require_value(argc, argv, i, value, error) ||
+                !parse_uint64_value(value, config.block_id)) {
+                error = error.empty() ? "Invalid value for --block-id" : error;
+                return false;
+            }
         } else if (arg == "--experiment-name") {
             if (!require_value(argc, argv, i, config.experiment_name, error)) {
                 return false;
@@ -368,6 +388,8 @@ std::string usage(const char *program_name) {
         << "  --threads-per-block y       CUDA blockDim.x (default: 256)\n"
         << "  --grid-z z                  CUDA gridDim.z (default: 1)\n"
         << "  --seed S                    Global seed (default: SEED from .env or 42)\n"
+        << "  --repetition-id ID          Repetition identifier stored in CSV (default: REPETITION_ID from .env or 0)\n"
+        << "  --block-id ID               Block/run identifier stored in CSV (default: BLOCK_ID from .env or 0)\n"
         << "  --experiment-name NAME      Name stored in CSV and used in output filename (default: experiment)\n"
         << "  --output-dir DIR            Output directory (default: OUTPUT_DIR from .env or resultados)\n"
         << "  --device DEVICE_ID          CUDA device ID (default: DEFAULT_DEVICE from .env or 0)\n"

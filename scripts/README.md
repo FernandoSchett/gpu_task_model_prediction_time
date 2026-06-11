@@ -46,6 +46,12 @@ Rodar so sequenciais:
 PIPELINE_A_CLASSICAL=false bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
 
+Por padrao, os sequenciais usam `SEQUENCE_SPLIT_MODE=random` para ficarem comparaveis aos regressores classicos, que tambem usam split aleatorio. Para testar generalizacao temporal mais dificil:
+
+```bash
+SEQUENCE_SPLIT_MODE=chronological bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
 Rodar a analise de dependencia/Pearson/ACF dentro da Pipeline A:
 
 ```bash
@@ -57,6 +63,14 @@ As partes pesadas usam cache por padrao. Para forcar recalculo:
 ```bash
 SEQUENCE_CACHE=false bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
+
+O ranking da Pipeline A gera tres saidas:
+
+| Pasta | Conteudo |
+| --- | --- |
+| `resultados/analises_regressao/melhores_modelos_nao_sequenciais/` | Top apenas dos regressores classicos. |
+| `resultados/analises_regressao/melhores_modelos_sequenciais/` | Top apenas de LSTM, GRU e Temporal CNN. |
+| `resultados/analises_regressao/` | Top geral misturando modelos sequenciais e nao sequenciais. |
 
 ## Pipeline B
 

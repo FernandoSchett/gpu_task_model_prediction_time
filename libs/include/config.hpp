@@ -34,6 +34,8 @@ struct ExperimentConfig {
     int threads_per_block = 256;
     int grid_z = 1;
     std::uint64_t seed = 42;
+    std::uint64_t repetition_id = 0;
+    std::uint64_t block_id = 0;
     std::string experiment_name = "experiment";
     std::string output_dir = "resultados";
     int device_id = 0;
