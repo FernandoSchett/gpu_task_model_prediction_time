@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot rankings of the best regressor found in each analysis subfolder."""
+"""Plot rankings of the best ML model found in each analysis subfolder."""
 
 from __future__ import annotations
 
@@ -35,7 +35,17 @@ def condition_from_dir(path: Path) -> str:
     return name
 
 
-def load_rows(analysis_root: Path) -> list[dict[str, str]]:
+def better_row(candidate: dict[str, str], current: dict[str, str] | None) -> bool:
+    if current is None:
+        return True
+    candidate_r2 = float(candidate.get("best_r2", "nan"))
+    current_r2 = float(current.get("best_r2", "nan"))
+    if candidate_r2 != current_r2:
+        return candidate_r2 > current_r2
+    return float(candidate.get("best_rmse", "inf")) < float(current.get("best_rmse", "inf"))
+
+
+def load_classical_rows(analysis_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for summary_path in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/training_summary.csv")):
         condition = condition_from_dir(summary_path.parent)
@@ -43,10 +53,51 @@ def load_rows(analysis_root: Path) -> list[dict[str, str]]:
             for row in csv.DictReader(file):
                 row = dict(row)
                 row["condition"] = condition
+                row["model_family"] = "classical"
                 rows.append(row)
-    if not rows:
-        raise SystemExit(f"Nenhum training_summary.csv encontrado em {analysis_root}")
     return rows
+
+
+def load_sequential_rows(analysis_root: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    pattern = "*_sweep_moderado_sem_estimativas_agrupado/*/*/sequential_models/sequential_metrics.csv"
+    for metrics_path in sorted(analysis_root.glob(pattern)):
+        target_dir = metrics_path.parent.parent
+        label_dir = target_dir.parent
+        condition_dir = label_dir.parent
+        with metrics_path.open("r", encoding="utf-8", newline="") as file:
+            metrics_rows = list(csv.DictReader(file))
+        if not metrics_rows:
+            continue
+        best = max(metrics_rows, key=lambda row: (float(row["R2"]), -float(row["RMSE"])))
+        train_sequences = best.get("train_sequences", "")
+        test_sequences = best.get("test_sequences", "")
+        rows.append({
+            "condition": condition_from_dir(condition_dir),
+            "label": label_dir.name,
+            "target": target_dir.name,
+            "best_model": best["model"],
+            "best_mae": best["MAE"],
+            "best_rmse": best["RMSE"],
+            "best_r2": best["R2"],
+            "rows_used": str(int(train_sequences or 0) + int(test_sequences or 0)),
+            "metrics_csv": str(metrics_path),
+            "model_family": "sequential",
+        })
+    return rows
+
+
+def load_rows(analysis_root: Path) -> list[dict[str, str]]:
+    candidates = load_classical_rows(analysis_root) + load_sequential_rows(analysis_root)
+    if not candidates:
+        raise SystemExit(f"Nenhuma metrica de ML encontrada em {analysis_root}")
+
+    best_by_slice: dict[tuple[str, str, str], dict[str, str]] = {}
+    for row in candidates:
+        key = (row["condition"], row["label"], row["target"])
+        if better_row(row, best_by_slice.get(key)):
+            best_by_slice[key] = row
+    return list(best_by_slice.values())
 
 
 def write_rankings_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -54,6 +105,7 @@ def write_rankings_csv(path: Path, rows: list[dict[str, str]]) -> None:
         "condition",
         "label",
         "target",
+        "model_family",
         "best_model",
         "best_mae",
         "best_rmse",
@@ -93,10 +145,12 @@ def plot_target_rankings(output_dir: Path, rows: list[dict[str, str]], top_n: in
         ax.axvline(0.0, color="black", linewidth=0.8)
         for index, row in enumerate(target_rows):
             value = float(row["best_r2"])
+            model_suffix = "" if row.get("model_family") == "classical" else " (seq)"
+            text = f" {value:.3f} | {row['best_model']}{model_suffix} | RMSE {float(row['best_rmse']):.2f}"
             ax.text(
                 value,
                 index,
-                f" {value:.3f} | {row['best_model']} | RMSE {float(row['best_rmse']):.2f}",
+                text,
                 va="center",
                 fontsize=8,
             )

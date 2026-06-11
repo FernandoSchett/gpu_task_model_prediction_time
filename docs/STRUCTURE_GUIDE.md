@@ -23,7 +23,6 @@ tstr_cuda/
 │               │   │   ├── lightgbm.pkl
 │               │   │   ├── xgboost.pkl
 │               │   │   ├── catboost.pkl
-│               │   │   ├── tabpfn.pkl
 │               │   │   └── models_info.txt
 │               │   ├── regression_metrics.csv  # 📈 Métricas
 │               │   ├── mae_comparison.png
@@ -91,12 +90,11 @@ tstr_cuda/
 │ A2_regressores_classicos.py (compare mode)  │
 │ Pipeline A: classical ML                    │
 │                                             │
-│ Train 11+ Models:                           │
+│ Train classical regression models:          │
 │ - Linear/Ridge/Poly Ridge (baselines)       │
 │ - Random Forest, Gradient Boosting          │
 │ - LightGBM, XGBoost, CatBoost              │
 │ - LightGBM/XGBoost Quantiles               │
-│ - TabPFN (pretrained)                       │
 │ - kNN                                       │
 │                                             │
 │ Outputs:                                    │
@@ -126,10 +124,6 @@ tstr_cuda/
 # Install dependencies
 pip install -r requirements.txt
 
-# Optional: Install large models (TabPFN, XGBoost, etc)
-.\install_dependencies.ps1
-```
-
 ### 2️⃣ Coleta de Dados
 ```bash
 # Run GPU benchmark experiments (C++)
@@ -152,7 +146,7 @@ python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
 
 ### 5️⃣ Treinamento de Modelos (ML)
 ```bash
-# Train all 11+ models with cross-validation
+# Train classical regression models
 python3 scripts/py_pipeline_A/A2_regressores_classicos.py compare \
   --results-dir resultados/sweep_x \
   --cv-folds 5
@@ -230,14 +224,6 @@ WHERE cuda_error_code = 0
 GROUP BY kernel_type
 ```
 
-### Via Pandas Profiling
-```python
-import pandas_profiling
-df.profile_report().to_file("report.html")
-```
-
----
-
 ## 📈 Modelos Disponíveis
 
 | Modelo | Arquivo | Tipo | Early Stopping | Quantile |
@@ -250,7 +236,6 @@ df.profile_report().to_file("report.html")
 | LightGBM | lightgbm.pkl | Boosting | ✅ | ✅ (p90/p95/p99) |
 | XGBoost | xgboost.pkl | Boosting | ✅ | ✅ (p90/p95/p99) |
 | CatBoost | catboost.pkl | Boosting | ✅ | ❌ |
-| TabPFN | tabpfn.pkl | Foundation | ❌ | ❌ |
 | kNN Regression | (não salvo) | Non-parametric | ❌ | ❌ |
 
 ---
@@ -275,7 +260,7 @@ O script `A2_regressores_classicos.py` automaticamente:
 
 - **DATA_DICTIONARY v1.0** - 27 maio 2026
 - **54 campos** documentados
-- **11+ modelos** suportados
+- **Modelos clássicos e sequenciais** suportados
 - **3 targets** de previsão
 
 ---

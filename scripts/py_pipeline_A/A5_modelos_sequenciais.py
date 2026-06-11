@@ -197,6 +197,18 @@ def write_metrics(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def plot_sequential_metric_comparisons(output_dir: Path, rows: list[dict[str, str]]) -> list[Path]:
+    metric_rows: list[dict[str, float | str]] = []
+    for row in rows:
+        metric_rows.append({
+            "model": row["model"],
+            "MAE": float(row["MAE"]),
+            "RMSE": float(row["RMSE"]),
+            "R2": float(row["R2"]),
+        })
+    return [REG.plot_metric(output_dir, metric_rows, metric) for metric in ("MAE", "RMSE", "R2")]
+
+
 def expected_metadata(args: argparse.Namespace, job: dict[str, str], paths: list[Path]) -> dict[str, object]:
     return {
         "target": job["target"],
@@ -229,6 +241,11 @@ def existing_sequential_result(
         for name in ("lstm", "gru", "temporal_cnn")
         for suffix in ("error_distribution", "predicted_vs_actual", "error_qq_normal")
     ]
+    comparison_plots = [
+        seq_output_dir / "mae_comparison.png",
+        seq_output_dir / "rmse_comparison.png",
+        seq_output_dir / "r2_comparison.png",
+    ]
     if not metrics_path.exists() or not metadata_path.exists():
         return None
     if not all(path.exists() for path in required_models + required_plots):
@@ -241,6 +258,8 @@ def existing_sequential_result(
         return None
     if not metadata_matches(metadata, expected) or not rows:
         return None
+    if not all(path.exists() for path in comparison_plots):
+        plot_sequential_metric_comparisons(seq_output_dir, rows)
     best = min(rows, key=lambda row: float(row["RMSE"]))
     return {
         "label": job["label"],
@@ -324,6 +343,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
 
     metrics_path = seq_output_dir / "sequential_metrics.csv"
     write_metrics(metrics_path, rows)
+    plot_sequential_metric_comparisons(seq_output_dir, rows)
     best = min(rows, key=lambda row: float(row["RMSE"]))
     return {
         "label": job["label"],
