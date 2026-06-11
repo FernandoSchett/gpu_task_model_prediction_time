@@ -11,6 +11,7 @@ PRESERVED_ENV_VARS=(
   TELEMETRY_RESULTS_DIR
   TELEMETRY_RESULTS_DIRS
   ANALYSIS_ROOT
+  PYTHON_BIN
   TARGETS
   GPU_TARGETS
   EVT_BLOCK_SIZE
@@ -45,6 +46,13 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 EVT_BLOCK_SIZE="${EVT_BLOCK_SIZE:-1024}"
@@ -86,7 +94,7 @@ run_one() {
     exit 1
   fi
 
-  python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
+  "${PYTHON_BIN}" scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
     --results-dir ${results_dirs} \
     --analysis-dir "${analysis_dir}" \
     --targets ${TARGETS} \
@@ -95,7 +103,7 @@ run_one() {
   EVT_BLOCK_SIZE="${EVT_BLOCK_SIZE}" \
   EVT_THRESHOLD_QUANTILE="${EVT_THRESHOLD_QUANTILE}" \
   EVT_DECLUSTER_RUN_LENGTH="${EVT_DECLUSTER_RUN_LENGTH}" \
-  python3 scripts/py_pipeline_B/B1_valores_extremos.py \
+  "${PYTHON_BIN}" scripts/py_pipeline_B/B1_valores_extremos.py \
     --results-dir ${results_dirs} \
     --analysis-dir "${analysis_dir}" \
     --jobs-file "${analysis_dir}/analysis_jobs.csv" \

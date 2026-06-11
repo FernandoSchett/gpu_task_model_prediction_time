@@ -90,7 +90,20 @@ CsvWriter::CsvWriter(const std::string &path, std::uint64_t flush_every)
           << "gpu_power_limit_w,"
           << "gpu_sm_utilization_percent,"
           << "gpu_memory_utilization_percent,"
+          << "memory_used_mb,"
+          << "memory_free_mb,"
+          << "pstate,"
+          << "clocks_throttle_reasons,"
           << "gpu_telemetry_status,"
+          << "previous_response_time_us,"
+          << "previous_queueing_delay_us,"
+          << "previous_slowdown,"
+          << "time_since_previous_completion_us,"
+          << "rolling_mean_response_time_us,"
+          << "rolling_mean_queueing_delay_us,"
+          << "rolling_std_response_time_us,"
+          << "theoretical_occupancy,"
+          << "max_active_blocks_per_sm,"
           << "submit_time_ns,"
           << "launch_return_time_ns,"
           << "completion_time_ns,"
@@ -160,7 +173,20 @@ void CsvWriter::write(const KernelRecord &record) {
           << csv_escape(record.gpu_power_limit_w) << ','
           << csv_escape(record.gpu_sm_utilization_percent) << ','
           << csv_escape(record.gpu_memory_utilization_percent) << ','
+          << csv_escape(record.memory_used_mb) << ','
+          << csv_escape(record.memory_free_mb) << ','
+          << csv_escape(record.pstate) << ','
+          << csv_escape(record.clocks_throttle_reasons) << ','
           << csv_escape(record.gpu_telemetry_status) << ','
+          << std::fixed << std::setprecision(3) << record.previous_response_time_us << ','
+          << std::fixed << std::setprecision(3) << record.previous_queueing_delay_us << ','
+          << std::fixed << std::setprecision(6) << record.previous_slowdown << ','
+          << std::fixed << std::setprecision(3) << record.time_since_previous_completion_us << ','
+          << std::fixed << std::setprecision(3) << record.rolling_mean_response_time_us << ','
+          << std::fixed << std::setprecision(3) << record.rolling_mean_queueing_delay_us << ','
+          << std::fixed << std::setprecision(3) << record.rolling_std_response_time_us << ','
+          << std::fixed << std::setprecision(6) << record.theoretical_occupancy << ','
+          << record.max_active_blocks_per_sm << ','
           << record.submit_time_ns << ','
           << record.launch_return_time_ns << ','
           << record.completion_time_ns << ','

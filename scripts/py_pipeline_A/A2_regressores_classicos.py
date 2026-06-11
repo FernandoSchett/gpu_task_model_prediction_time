@@ -90,6 +90,32 @@ BASE_FEATURES = (
     "workers_x_total_warps",
     "requested_busy_wait_us_per_arrival_ms",
     "target_gpu_demand_percent",
+    "execution_order",
+    "time_since_experiment_start_us",
+    "time_since_previous_submit_us",
+    "time_since_previous_completion_us",
+    "rank_local_submitted_count",
+    "rank_local_completed_count",
+    "rank_local_backlog_at_launch",
+    "previous_response_time_us",
+    "previous_queueing_delay_us",
+    "previous_slowdown",
+    "rolling_mean_response_time_us",
+    "rolling_mean_queueing_delay_us",
+    "rolling_std_response_time_us",
+    "gpu_clock_sm_mhz",
+    "gpu_clock_mem_mhz",
+    "gpu_temperature_c",
+    "gpu_power_w",
+    "gpu_power_limit_w",
+    "gpu_sm_utilization_percent",
+    "gpu_memory_utilization_percent",
+    "memory_used_mb",
+    "memory_free_mb",
+    "pstate",
+    "clocks_throttle_reasons",
+    "theoretical_occupancy",
+    "max_active_blocks_per_sm",
 )
 
 def parse_args() -> argparse.Namespace:
@@ -194,6 +220,23 @@ def to_float(row: dict[str, str], name: str, default: float = math.nan) -> float
         return default
 
 
+def pstate_to_float(row: dict[str, str]) -> float:
+    value = row.get("pstate", "").strip().upper()
+    if value.startswith("P"):
+        value = value[1:]
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
+
+
+def throttle_reasons_to_float(row: dict[str, str]) -> float:
+    value = row.get("clocks_throttle_reasons", "").strip().lower()
+    if not value or value in {"n/a", "not active", "none"}:
+        return 0.0
+    return 1.0
+
+
 def load_rows(results_dir: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for csv_path in sorted(results_dir.rglob("resultados_experimentos_*.csv")):
@@ -251,6 +294,32 @@ def add_derived_features(row: dict[str, str]) -> dict[str, float]:
             requested_us / arrival_wait_ms if arrival_wait_ms > 0 else 0.0,
         ),
         "target_gpu_demand_percent": target_gpu_demand_percent(row),
+        "execution_order": to_float(row, "execution_order", to_float(row, "rank_local_submitted_count", 0.0)),
+        "time_since_experiment_start_us": to_float(row, "time_since_experiment_start_us", 0.0),
+        "time_since_previous_submit_us": to_float(row, "time_since_previous_submit_us", 0.0),
+        "time_since_previous_completion_us": to_float(row, "time_since_previous_completion_us", 0.0),
+        "rank_local_submitted_count": to_float(row, "rank_local_submitted_count", 0.0),
+        "rank_local_completed_count": to_float(row, "rank_local_completed_count", 0.0),
+        "rank_local_backlog_at_launch": to_float(row, "rank_local_backlog_at_launch", 0.0),
+        "previous_response_time_us": to_float(row, "previous_response_time_us", 0.0),
+        "previous_queueing_delay_us": to_float(row, "previous_queueing_delay_us", 0.0),
+        "previous_slowdown": to_float(row, "previous_slowdown", 0.0),
+        "rolling_mean_response_time_us": to_float(row, "rolling_mean_response_time_us", 0.0),
+        "rolling_mean_queueing_delay_us": to_float(row, "rolling_mean_queueing_delay_us", 0.0),
+        "rolling_std_response_time_us": to_float(row, "rolling_std_response_time_us", 0.0),
+        "gpu_clock_sm_mhz": to_float(row, "gpu_clock_sm_mhz", 0.0),
+        "gpu_clock_mem_mhz": to_float(row, "gpu_clock_mem_mhz", 0.0),
+        "gpu_temperature_c": to_float(row, "gpu_temperature_c", 0.0),
+        "gpu_power_w": to_float(row, "gpu_power_w", 0.0),
+        "gpu_power_limit_w": to_float(row, "gpu_power_limit_w", 0.0),
+        "gpu_sm_utilization_percent": to_float(row, "gpu_sm_utilization_percent", 0.0),
+        "gpu_memory_utilization_percent": to_float(row, "gpu_memory_utilization_percent", 0.0),
+        "memory_used_mb": to_float(row, "memory_used_mb", 0.0),
+        "memory_free_mb": to_float(row, "memory_free_mb", 0.0),
+        "pstate": pstate_to_float(row),
+        "clocks_throttle_reasons": throttle_reasons_to_float(row),
+        "theoretical_occupancy": to_float(row, "theoretical_occupancy", 0.0),
+        "max_active_blocks_per_sm": to_float(row, "max_active_blocks_per_sm", 0.0),
         "queueing_delay_us": queueing_delay_us,
         "slowdown": slowdown,
     })
@@ -348,6 +417,32 @@ def row_features_compare(row: dict[str, str]) -> dict[str, float]:
             requested_us / arrival_wait_ms if arrival_wait_ms > 0 else 0.0,
         ),
         "target_gpu_demand_percent": target_gpu_demand_percent,
+        "execution_order": to_float(row, "execution_order", to_float(row, "rank_local_submitted_count", 0.0)),
+        "time_since_experiment_start_us": to_float(row, "time_since_experiment_start_us", 0.0),
+        "time_since_previous_submit_us": to_float(row, "time_since_previous_submit_us", 0.0),
+        "time_since_previous_completion_us": to_float(row, "time_since_previous_completion_us", 0.0),
+        "rank_local_submitted_count": to_float(row, "rank_local_submitted_count", 0.0),
+        "rank_local_completed_count": to_float(row, "rank_local_completed_count", 0.0),
+        "rank_local_backlog_at_launch": to_float(row, "rank_local_backlog_at_launch", 0.0),
+        "previous_response_time_us": to_float(row, "previous_response_time_us", 0.0),
+        "previous_queueing_delay_us": to_float(row, "previous_queueing_delay_us", 0.0),
+        "previous_slowdown": to_float(row, "previous_slowdown", 0.0),
+        "rolling_mean_response_time_us": to_float(row, "rolling_mean_response_time_us", 0.0),
+        "rolling_mean_queueing_delay_us": to_float(row, "rolling_mean_queueing_delay_us", 0.0),
+        "rolling_std_response_time_us": to_float(row, "rolling_std_response_time_us", 0.0),
+        "gpu_clock_sm_mhz": to_float(row, "gpu_clock_sm_mhz", 0.0),
+        "gpu_clock_mem_mhz": to_float(row, "gpu_clock_mem_mhz", 0.0),
+        "gpu_temperature_c": to_float(row, "gpu_temperature_c", 0.0),
+        "gpu_power_w": to_float(row, "gpu_power_w", 0.0),
+        "gpu_power_limit_w": to_float(row, "gpu_power_limit_w", 0.0),
+        "gpu_sm_utilization_percent": to_float(row, "gpu_sm_utilization_percent", 0.0),
+        "gpu_memory_utilization_percent": to_float(row, "gpu_memory_utilization_percent", 0.0),
+        "memory_used_mb": to_float(row, "memory_used_mb", 0.0),
+        "memory_free_mb": to_float(row, "memory_free_mb", 0.0),
+        "pstate": pstate_to_float(row),
+        "clocks_throttle_reasons": throttle_reasons_to_float(row),
+        "theoretical_occupancy": to_float(row, "theoretical_occupancy", 0.0),
+        "max_active_blocks_per_sm": to_float(row, "max_active_blocks_per_sm", 0.0),
         "queueing_delay_us": to_float(row, "queueing_delay_us", response_us - requested_us),
         "slowdown": to_float(row, "slowdown", response_us / requested_us if requested_us > 0 else math.nan),
     }

@@ -267,3 +267,66 @@ cudaError_t launch_configurable_kernel(cudaStream_t stream,
 
     return cudaGetLastError();
 }
+
+cudaError_t compute_theoretical_occupancy(KernelType kernel_type,
+                                          int threads_per_block,
+                                          int sm_count,
+                                          int *max_active_blocks_per_sm,
+                                          double *theoretical_occupancy) {
+    if (max_active_blocks_per_sm == nullptr || theoretical_occupancy == nullptr ||
+        threads_per_block <= 0 || sm_count <= 0) {
+        return cudaErrorInvalidValue;
+    }
+
+    int active_blocks = 0;
+    cudaError_t error = cudaSuccess;
+    switch (kernel_type) {
+        case KernelType::BusyWait:
+            error = cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active_blocks,
+                                                                  busy_wait_kernel,
+                                                                  threads_per_block,
+                                                                  0);
+            break;
+        case KernelType::Compute:
+            error = cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active_blocks,
+                                                                  compute_kernel,
+                                                                  threads_per_block,
+                                                                  0);
+            break;
+        case KernelType::Memory:
+            error = cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active_blocks,
+                                                                  memory_kernel,
+                                                                  threads_per_block,
+                                                                  0);
+            break;
+        case KernelType::Mixed:
+            error = cudaOccupancyMaxActiveBlocksPerMultiprocessor(&active_blocks,
+                                                                  mixed_kernel,
+                                                                  threads_per_block,
+                                                                  0);
+            break;
+    }
+    if (error != cudaSuccess) {
+        return error;
+    }
+
+    cudaDeviceProp prop{};
+    int device_id = 0;
+    error = cudaGetDevice(&device_id);
+    if (error != cudaSuccess) {
+        return error;
+    }
+    error = cudaGetDeviceProperties(&prop, device_id);
+    if (error != cudaSuccess) {
+        return error;
+    }
+
+    *max_active_blocks_per_sm = active_blocks;
+    const int active_threads_per_sm = active_blocks * threads_per_block;
+    *theoretical_occupancy =
+        prop.maxThreadsPerMultiProcessor > 0
+            ? static_cast<double>(active_threads_per_sm) /
+                  static_cast<double>(prop.maxThreadsPerMultiProcessor)
+            : 0.0;
+    return cudaSuccess;
+}

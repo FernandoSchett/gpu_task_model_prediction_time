@@ -8,9 +8,11 @@
 #include <cuda_runtime.h>
 
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -27,12 +29,20 @@ namespace {
 constexpr std::uint64_t kRankSeedPrime = 1000003ULL;
 constexpr std::uint64_t kThreadSeedPrime = 1000033ULL;
 constexpr std::uint64_t kWarmupSeedSalt = 0x9E3779B97F4A7C15ULL;
+constexpr std::size_t kRollingWindowSize = 32;
 
 struct ExperimentRuntimeState {
     std::atomic<std::uint64_t> rank_submitted_count{0};
     std::atomic<std::uint64_t> rank_completed_count{0};
     std::atomic<std::int64_t> rank_last_submit_time_ns{0};
     std::atomic<std::int64_t> measurement_start_ns{0};
+    std::mutex history_mutex;
+    std::int64_t last_completion_time_ns = 0;
+    double last_response_time_us = 0.0;
+    double last_queueing_delay_us = 0.0;
+    double last_slowdown = 0.0;
+    std::deque<double> response_window;
+    std::deque<double> queueing_window;
 };
 
 struct DeviceInfo {
@@ -198,6 +208,29 @@ std::uint64_t ceil_div(std::uint64_t numerator, std::uint64_t denominator) {
     return denominator == 0 ? 0 : (numerator + denominator - 1) / denominator;
 }
 
+double mean_of(const std::deque<double> &values) {
+    if (values.empty()) {
+        return 0.0;
+    }
+    double sum = 0.0;
+    for (const double value : values) {
+        sum += value;
+    }
+    return sum / static_cast<double>(values.size());
+}
+
+double stddev_of(const std::deque<double> &values, double mean) {
+    if (values.size() < 2) {
+        return 0.0;
+    }
+    double sum_squared = 0.0;
+    for (const double value : values) {
+        const double diff = value - mean;
+        sum_squared += diff * diff;
+    }
+    return std::sqrt(sum_squared / static_cast<double>(values.size() - 1));
+}
+
 DeviceInfo collect_device_info(const ExperimentConfig &config, const cudaDeviceProp &prop) {
     DeviceInfo info;
     info.gpu_name = prop.name;
@@ -285,6 +318,15 @@ void run_host_thread(const ExperimentConfig &config,
                 static_cast<std::uint64_t>(config.blocks_x) * static_cast<std::uint64_t>(config.grid_z);
             const std::uint64_t total_cuda_threads =
                 total_blocks * static_cast<std::uint64_t>(config.threads_per_block);
+            int max_active_blocks_per_sm = 0;
+            double theoretical_occupancy = 0.0;
+            const cudaError_t occupancy_error =
+                compute_theoretical_occupancy(config.kernel_type,
+                                             config.threads_per_block,
+                                             device_info.sm_count,
+                                             &max_active_blocks_per_sm,
+                                             &theoretical_occupancy);
+            throw_on_cuda_error(occupancy_error, "compute_theoretical_occupancy");
 
             for (int warmup_index = 0; warmup_index < config.warmup_kernels; ++warmup_index) {
                 const std::uint64_t warmup_duration_us = kernel_dist(warmup_rng);
@@ -388,6 +430,48 @@ void run_host_thread(const ExperimentConfig &config,
                 const double response_time_us =
                     static_cast<double>(completion_time_ns - submit_time_ns) / 1000.0;
                 const GpuTelemetrySnapshot telemetry_snapshot = gpu_telemetry.latest_snapshot();
+                const double queueing_delay_us =
+                    response_time_us - static_cast<double>(requested_busy_wait_us);
+                const double slowdown =
+                    requested_busy_wait_us > 0
+                        ? response_time_us / static_cast<double>(requested_busy_wait_us)
+                        : 0.0;
+
+                double previous_response_time_us = 0.0;
+                double previous_queueing_delay_us = 0.0;
+                double previous_slowdown = 0.0;
+                double time_since_previous_completion_us = -1.0;
+                double rolling_mean_response_time_us = 0.0;
+                double rolling_mean_queueing_delay_us = 0.0;
+                double rolling_std_response_time_us = 0.0;
+                {
+                    std::lock_guard<std::mutex> lock(runtime_state.history_mutex);
+                    previous_response_time_us = runtime_state.last_response_time_us;
+                    previous_queueing_delay_us = runtime_state.last_queueing_delay_us;
+                    previous_slowdown = runtime_state.last_slowdown;
+                    time_since_previous_completion_us =
+                        runtime_state.last_completion_time_ns > 0
+                            ? static_cast<double>(completion_time_ns -
+                                                  runtime_state.last_completion_time_ns) / 1000.0
+                            : -1.0;
+                    rolling_mean_response_time_us = mean_of(runtime_state.response_window);
+                    rolling_mean_queueing_delay_us = mean_of(runtime_state.queueing_window);
+                    rolling_std_response_time_us =
+                        stddev_of(runtime_state.response_window, rolling_mean_response_time_us);
+
+                    runtime_state.last_completion_time_ns = completion_time_ns;
+                    runtime_state.last_response_time_us = response_time_us;
+                    runtime_state.last_queueing_delay_us = queueing_delay_us;
+                    runtime_state.last_slowdown = slowdown;
+                    runtime_state.response_window.push_back(response_time_us);
+                    runtime_state.queueing_window.push_back(queueing_delay_us);
+                    if (runtime_state.response_window.size() > kRollingWindowSize) {
+                        runtime_state.response_window.pop_front();
+                    }
+                    if (runtime_state.queueing_window.size() > kRollingWindowSize) {
+                        runtime_state.queueing_window.pop_front();
+                    }
+                }
 
                 KernelRecord record;
                 record.experiment_name = config.experiment_name;
@@ -446,7 +530,20 @@ void run_host_thread(const ExperimentConfig &config,
                 record.gpu_power_limit_w = telemetry_snapshot.power_limit_w;
                 record.gpu_sm_utilization_percent = telemetry_snapshot.gpu_utilization;
                 record.gpu_memory_utilization_percent = telemetry_snapshot.memory_utilization;
+                record.memory_used_mb = telemetry_snapshot.memory_used_mb;
+                record.memory_free_mb = telemetry_snapshot.memory_free_mb;
+                record.pstate = telemetry_snapshot.pstate;
+                record.clocks_throttle_reasons = telemetry_snapshot.clocks_throttle_reasons;
                 record.gpu_telemetry_status = telemetry_snapshot.status;
+                record.previous_response_time_us = previous_response_time_us;
+                record.previous_queueing_delay_us = previous_queueing_delay_us;
+                record.previous_slowdown = previous_slowdown;
+                record.time_since_previous_completion_us = time_since_previous_completion_us;
+                record.rolling_mean_response_time_us = rolling_mean_response_time_us;
+                record.rolling_mean_queueing_delay_us = rolling_mean_queueing_delay_us;
+                record.rolling_std_response_time_us = rolling_std_response_time_us;
+                record.theoretical_occupancy = theoretical_occupancy;
+                record.max_active_blocks_per_sm = max_active_blocks_per_sm;
                 record.submit_time_ns = submit_time_ns;
                 record.launch_return_time_ns = launch_return_time_ns;
                 record.completion_time_ns = completion_time_ns;
@@ -459,12 +556,8 @@ void run_host_thread(const ExperimentConfig &config,
                     cuda_event_elapsed_ms >= 0.0f
                         ? static_cast<double>(cuda_event_elapsed_ms) * 1000.0
                         : -1.0;
-                record.queueing_delay_us =
-                    response_time_us - static_cast<double>(requested_busy_wait_us);
-                record.slowdown =
-                    requested_busy_wait_us > 0
-                        ? response_time_us / static_cast<double>(requested_busy_wait_us)
-                        : 0.0;
+                record.queueing_delay_us = queueing_delay_us;
+                record.slowdown = slowdown;
                 record.cuda_error_code = static_cast<int>(final_error);
                 record.cuda_error_string = cuda_error_message(final_error);
 

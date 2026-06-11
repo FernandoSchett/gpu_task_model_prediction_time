@@ -29,4 +29,10 @@ cudaError_t launch_configurable_kernel(cudaStream_t stream,
                                        int threads_per_block,
                                        int grid_z);
 
+cudaError_t compute_theoretical_occupancy(KernelType kernel_type,
+                                          int threads_per_block,
+                                          int sm_count,
+                                          int *max_active_blocks_per_sm,
+                                          double *theoretical_occupancy);
+
 #endif

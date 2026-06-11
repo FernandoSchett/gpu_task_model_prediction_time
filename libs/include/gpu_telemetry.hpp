@@ -18,6 +18,10 @@ struct GpuTelemetrySnapshot {
     std::string power_limit_w;
     std::string gpu_utilization;
     std::string memory_utilization;
+    std::string memory_used_mb;
+    std::string memory_free_mb;
+    std::string pstate;
+    std::string clocks_throttle_reasons;
     std::string status = "disabled";
 };
 
@@ -47,7 +51,7 @@ private:
                       std::int64_t sample_time_ns,
                       const std::string &status,
                       const std::string &raw_output,
-                      const std::string values[7]);
+                      const std::string values[11]);
 
     const ExperimentConfig &config_;
     int mpi_world_size_ = 1;

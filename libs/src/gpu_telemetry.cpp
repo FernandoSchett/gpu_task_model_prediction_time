@@ -93,7 +93,8 @@ std::string run_nvidia_smi_query(int device_id, int *exit_code) {
     std::ostringstream command;
     command << "nvidia-smi -i " << device_id
             << " --query-gpu=clocks.sm,clocks.mem,temperature.gpu,power.draw,power.limit,"
-            << "utilization.gpu,utilization.memory --format=csv,noheader,nounits 2>&1";
+            << "utilization.gpu,utilization.memory,memory.used,memory.free,pstate,"
+            << "clocks_throttle_reasons.active --format=csv,noheader,nounits 2>&1";
 
 #if defined(_WIN32)
     FILE *pipe = _popen(command.str().c_str(), "r");
@@ -161,10 +162,10 @@ void GpuTelemetryMonitor::sample_once(const std::string &phase) {
     const std::string first_line = first_non_empty_line(raw_output);
     const std::vector<std::string> fields = split_csv_line(first_line);
 
-    std::string values[7] = {"", "", "", "", "", "", ""};
+    std::string values[11] = {"", "", "", "", "", "", "", "", "", "", ""};
     std::string status = exit_code == 0 ? "ok" : "nvidia-smi-error";
-    if (fields.size() >= 7) {
-        for (std::size_t i = 0; i < 7; ++i) {
+    if (fields.size() >= 11) {
+        for (std::size_t i = 0; i < 11; ++i) {
             values[i] = fields[i];
         }
     } else if (status == "ok") {
@@ -180,6 +181,10 @@ void GpuTelemetryMonitor::sample_once(const std::string &phase) {
         latest_snapshot_.power_limit_w = values[4];
         latest_snapshot_.gpu_utilization = values[5];
         latest_snapshot_.memory_utilization = values[6];
+        latest_snapshot_.memory_used_mb = values[7];
+        latest_snapshot_.memory_free_mb = values[8];
+        latest_snapshot_.pstate = values[9];
+        latest_snapshot_.clocks_throttle_reasons = values[10];
         latest_snapshot_.status = status;
     }
 
@@ -260,6 +265,10 @@ void GpuTelemetryMonitor::write_header() {
           << "power_limit_w,"
           << "gpu_utilization,"
           << "memory_utilization,"
+          << "memory_used_mb,"
+          << "memory_free_mb,"
+          << "pstate,"
+          << "clocks_throttle_reasons,"
           << "nvidia_smi_status,"
           << "nvidia_smi_raw_output\n";
 }
@@ -268,7 +277,7 @@ void GpuTelemetryMonitor::write_sample(const std::string &phase,
                                        std::int64_t sample_time_ns,
                                        const std::string &status,
                                        const std::string &raw_output,
-                                       const std::string values[7]) {
+                                       const std::string values[11]) {
     std::lock_guard<std::mutex> lock(file_mutex_);
     if (!file_) {
         return;
@@ -289,6 +298,10 @@ void GpuTelemetryMonitor::write_sample(const std::string &phase,
           << csv_escape(values[4]) << ','
           << csv_escape(values[5]) << ','
           << csv_escape(values[6]) << ','
+          << csv_escape(values[7]) << ','
+          << csv_escape(values[8]) << ','
+          << csv_escape(values[9]) << ','
+          << csv_escape(values[10]) << ','
           << csv_escape(status) << ','
           << csv_escape(raw_output) << '\n';
     file_.flush();
