@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-architectures", type=int, default=int(os.getenv("CNN2D_MAX_ARCHITECTURES", "8")))
     parser.add_argument("--tf-device", choices=("auto", "cpu"), default=os.getenv("CNN2D_TF_DEVICE", "auto"))
     parser.add_argument("--require-gpu", action=argparse.BooleanOptionalAction, default=env_flag("CNN2D_REQUIRE_GPU", True))
+    parser.add_argument("--only-model", default=os.getenv("CNN2D_MODEL_ONLY", ""), help="Train only one 2D CNN architecture by name.")
+    parser.add_argument("--force-model", action="store_true", default=env_flag("CNN2D_FORCE_MODEL", False), help="Retrain selected architecture even when cached model exists.")
     parser.add_argument("--no-cache", action="store_true")
     return parser.parse_args()
 
@@ -114,6 +116,17 @@ def architecture_grid(max_architectures: int) -> list[dict[str, float | int | st
                     "extra_block": 1,
                 })
     return grid[:max_architectures] if max_architectures > 0 else grid
+
+
+def selected_architectures(args: argparse.Namespace) -> list[dict[str, float | int | str]]:
+    grid = architecture_grid(args.max_architectures)
+    if not args.only_model:
+        return grid
+    selected = [params for params in grid if str(params["name"]) == args.only_model]
+    if selected:
+        return selected
+    known = ", ".join(str(params["name"]) for params in grid)
+    raise SystemExit(f"Arquitetura CNN2D nao encontrada: {args.only_model}. Opcoes: {known}")
 
 
 def build_model(keras, input_shape: tuple[int, int, int], params: dict[str, float | int | str]):
@@ -206,14 +219,15 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
     np.savez_compressed(preprocessing_path, mean=mean, scale=scale)
 
     results: list[dict[str, str]] = []
-    for params in architecture_grid(args.max_architectures):
+    for params in selected_architectures(args):
         name = str(params["name"])
         model_path = models_dir / f"{name}.keras"
         metadata_path = models_dir / f"{name}.json"
         metrics_path = models_dir / f"{name}_metrics.json"
         cached = False
 
-        if not args.no_cache and model_path.exists() and metrics_path.exists():
+        use_cache = not args.no_cache and not args.force_model
+        if use_cache and model_path.exists() and metrics_path.exists():
             model = keras.models.load_model(model_path)
             prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
             metric_row = metrics(test_y, prediction)

@@ -62,7 +62,7 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
-TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
+TARGETS="${TARGETS:-response_time_us}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
 MODEL_N_JOBS="${MODEL_N_JOBS:--1}"

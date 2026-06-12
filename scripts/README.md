@@ -9,6 +9,22 @@ Agora a organizacao segue tres pipelines:
 | C - CNN 2D | `rodar_pipeline_c_cnn2d.sh` | Transforma os dados em tensores worker x tempo x features e treina CNNs 2D. |
 | A + B + C | `rodar_todas_pipelines.sh` | Roda Pipeline A, Pipeline B e Pipeline C. |
 
+## Alvos
+
+Por padrao, todas as pipelines rodam apenas `response_time_us`.
+
+Rodar todos os alvos:
+
+```bash
+TARGETS="response_time_us queueing_delay_us slowdown" bash scripts/rodar_todas_pipelines.sh
+```
+
+Rodar apenas um alvo especifico:
+
+```bash
+TARGETS=slowdown bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
 ## Pipeline A
 
 Arquivos Python da Pipeline A ficam em `scripts/py_pipeline_A/`:
@@ -152,6 +168,12 @@ Forcar recalculo:
 
 ```bash
 CNN2D_CACHE=false bash scripts/rodar_pipeline_c_cnn2d.sh
+```
+
+Rodar novamente apenas uma arquitetura CNN 2D, ignorando cache:
+
+```bash
+CNN2D_MODEL_ONLY=cnn2d_f16_kt3_d64 CNN2D_FORCE_MODEL=true bash scripts/rodar_pipeline_c_cnn2d.sh
 ```
 
 Os resultados por recorte/alvo ficam na mesma estrutura da Pipeline A, dentro de `2d_models`:

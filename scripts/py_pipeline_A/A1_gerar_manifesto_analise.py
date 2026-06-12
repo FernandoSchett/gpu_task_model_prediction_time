@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 
-DEFAULT_TARGETS = ("response_time_us", "queueing_delay_us", "slowdown")
+DEFAULT_TARGETS = ("response_time_us",)
 DEFAULT_GPU_TARGETS = ("10", "50", "100", "120")
 DEFAULT_KERNEL_TYPES = ("busy_wait", "compute", "memory", "mixed")
 

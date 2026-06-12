@@ -25,6 +25,8 @@ PRESERVED_ENV_VARS=(
   CNN2D_TF_DEVICE
   CNN2D_REQUIRE_GPU
   CNN2D_CACHE
+  CNN2D_MODEL_ONLY
+  CNN2D_FORCE_MODEL
   SEED
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
@@ -53,7 +55,7 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
-TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
+TARGETS="${TARGETS:-response_time_us}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CNN2D_WINDOW_SIZE="${CNN2D_WINDOW_SIZE:-32}"
 CNN2D_STRIDE="${CNN2D_STRIDE:-1}"
@@ -66,6 +68,8 @@ CNN2D_MAX_ARCHITECTURES="${CNN2D_MAX_ARCHITECTURES:-8}"
 CNN2D_TF_DEVICE="${CNN2D_TF_DEVICE:-auto}"
 CNN2D_REQUIRE_GPU="${CNN2D_REQUIRE_GPU:-true}"
 CNN2D_CACHE="${CNN2D_CACHE:-true}"
+CNN2D_MODEL_ONLY="${CNN2D_MODEL_ONLY:-}"
+CNN2D_FORCE_MODEL="${CNN2D_FORCE_MODEL:-false}"
 SEED="${SEED:-42}"
 
 if [[ -z "${PYTHON_BIN:-}" ]]; then
@@ -94,6 +98,13 @@ fi
 CNN2D_CACHE_ARGS=()
 if [[ "${CNN2D_CACHE}" == "false" ]] || [[ "${CNN2D_CACHE}" == "0" ]]; then
   CNN2D_CACHE_ARGS+=(--no-cache)
+fi
+CNN2D_MODEL_ARGS=()
+if [[ -n "${CNN2D_MODEL_ONLY}" ]]; then
+  CNN2D_MODEL_ARGS+=(--only-model "${CNN2D_MODEL_ONLY}")
+fi
+if [[ "${CNN2D_FORCE_MODEL}" == "true" ]] || [[ "${CNN2D_FORCE_MODEL}" == "1" ]]; then
+  CNN2D_MODEL_ARGS+=(--force-model)
 fi
 
 matching_dirs() {
@@ -151,6 +162,7 @@ run_one() {
     --seed "${SEED}" \
     --max-architectures "${CNN2D_MAX_ARCHITECTURES}" \
     --tf-device "${CNN2D_TF_DEVICE}" \
+    "${CNN2D_MODEL_ARGS[@]}" \
     "${CNN2D_CACHE_ARGS[@]}"
 }
 

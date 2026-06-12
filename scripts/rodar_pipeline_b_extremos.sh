@@ -55,7 +55,7 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="python3"
   fi
 fi
-TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
+TARGETS="${TARGETS:-response_time_us}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 EVT_BLOCK_SIZE="${EVT_BLOCK_SIZE:-1024}"
 EVT_THRESHOLD_QUANTILE="${EVT_THRESHOLD_QUANTILE:-0.95}"
