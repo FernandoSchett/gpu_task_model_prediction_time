@@ -158,8 +158,8 @@ run_one() {
       --cv-folds "${CV_FOLDS}" \
       "${CLASSICAL_COMPARE_ARGS[@]}"
 
-    if [[ -f "scripts/py_pipeline_A/A3_rankings_regressores.py" ]]; then
-      "${PYTHON_BIN}" scripts/py_pipeline_A/A3_rankings_regressores.py --analysis-root "$(dirname "${analysis_dir}")"
+    if [[ -f "scripts/py_outros/comparar_modelos_pipelines.py" ]]; then
+      "${PYTHON_BIN}" scripts/py_outros/comparar_modelos_pipelines.py --analysis-root "$(dirname "${analysis_dir}")"
     fi
 
     if [[ ("${DEPENDENCY_ONLY}" == "true" || "${DEPENDENCY_ONLY}" == "1") && -f "scripts/py_pipeline_A/A4_rankings_dependencia.py" ]]; then
@@ -192,6 +192,6 @@ run_one() {
 run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
 run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
 
-if [[ -f "scripts/py_pipeline_A/A3_rankings_regressores.py" ]]; then
-  "${PYTHON_BIN}" scripts/py_pipeline_A/A3_rankings_regressores.py --analysis-root "${ANALYSIS_ROOT}"
+if [[ -f "scripts/py_outros/comparar_modelos_pipelines.py" ]]; then
+  "${PYTHON_BIN}" scripts/py_outros/comparar_modelos_pipelines.py --analysis-root "${ANALYSIS_ROOT}"
 fi

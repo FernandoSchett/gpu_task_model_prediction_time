@@ -7,3 +7,4 @@ cd "${REPO_ROOT}"
 
 bash scripts/rodar_pipeline_a_machine_learning.sh
 bash scripts/rodar_pipeline_b_extremos.sh
+bash scripts/rodar_pipeline_c_cnn2d.sh
