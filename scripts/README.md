@@ -48,6 +48,18 @@ Rodar so sequenciais:
 PIPELINE_A_CLASSICAL=false bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
 
+Rodar novamente apenas um modelo classico, ignorando cache:
+
+```bash
+CLASSICAL_MODEL_ONLY=lightgbm CLASSICAL_FORCE_MODEL=true bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
+Rodar novamente apenas um modelo sequencial, ignorando cache:
+
+```bash
+PIPELINE_A_CLASSICAL=false SEQUENCE_MODEL_ONLY=lstm SEQUENCE_FORCE_MODEL=true bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
 Por padrao, os sequenciais usam `SEQUENCE_SPLIT_MODE=random` para ficarem comparaveis aos regressores classicos, que tambem usam split aleatorio. Para testar generalizacao temporal mais dificil:
 
 ```bash
@@ -83,7 +95,7 @@ Arquivos Python da Pipeline B ficam em `scripts/py_pipeline_B/`:
 
 | Script | Etapa |
 | --- | --- |
-| `py_pipeline_B/B1_valores_extremos.py` | Ajusta GEV sobre maximos por bloco e GPD sobre excessos declusterizados. |
+| `py_pipeline_B/B1_valores_extremos.py` | Ajusta GEV/Gumbel sobre maximos por bloco e GPD sobre excessos declusterizados. |
 
 Comando padrao:
 
@@ -95,6 +107,19 @@ Forcar recalculo:
 
 ```bash
 EVT_CACHE=false bash scripts/rodar_pipeline_b_extremos.sh
+```
+
+Rodar novamente apenas um ajuste da Pipeline B:
+
+```bash
+EVT_MODEL_ONLY=gev EVT_FORCE_MODEL=true bash scripts/rodar_pipeline_b_extremos.sh
+```
+
+Outras opcoes:
+
+```bash
+EVT_MODEL_ONLY=gumbel EVT_FORCE_MODEL=true bash scripts/rodar_pipeline_b_extremos.sh
+EVT_MODEL_ONLY=gpd EVT_FORCE_MODEL=true bash scripts/rodar_pipeline_b_extremos.sh
 ```
 
 ## Pipeline C

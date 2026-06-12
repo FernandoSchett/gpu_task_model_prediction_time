@@ -138,6 +138,8 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
     compare_parser.add_argument("--dependency-only", "--skip-training", action="store_true", help="Generate correlation/dependency metrics without training models.")
     compare_parser.add_argument("--no-dependency-cache", action="store_true", help="Recompute dependency metrics even when dependency_metrics.csv already exists.")
+    compare_parser.add_argument("--only-model", default=os.getenv("CLASSICAL_MODEL_ONLY", ""), help="Train only one classical model by internal name.")
+    compare_parser.add_argument("--force-model", action="store_true", default=os.getenv("CLASSICAL_FORCE_MODEL", "").lower() in {"1", "true", "yes", "on", "sim"}, help="Retrain --only-model even when cached model exists.")
     
     baseline_parser = subparsers.add_parser("baseline", help="Train linear/ridge/quadratic regression models")
     baseline_parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Directory containing experiment result CSVs.")
@@ -1308,6 +1310,7 @@ def dependency_only_result(paths: list[Path], target: str, output_dir: Path, use
 def train_and_plot(
     paths: list[Path], target: str, output_dir: Path, test_fraction: float,
     seed: int, knn_k: int, knn_train_limit: int, cv_folds: int = 5,
+    only_model: str = "", force_model: bool = False,
 ) -> dict[str, str]:
     if knn_train_limit <= 0:
         knn_train_limit = DEFAULT_KNN_TRAIN_LIMIT
@@ -1353,6 +1356,32 @@ def train_and_plot(
     saved_model_paths: list[Path] = []
     resumed_model_names: list[str] = []
     trained_model_names: list[str] = []
+    selected_model = only_model.strip().lower()
+
+    aliases = {
+        "linear": "linear_regression",
+        "ridge": "ridge_regression",
+        "polynomial": "polynomial_ridge",
+        "poly": "polynomial_ridge",
+        "tree": "decision_tree",
+        "forest": "random_forest",
+        "rf": "random_forest",
+        "boosting": "gradient_boosting",
+        "gb": "gradient_boosting",
+        "knn": "knn_regression",
+        "lgbm": "lightgbm",
+        "lightgbm_p90": "lightgbm_quantile_p90",
+        "lightgbm_p95": "lightgbm_quantile_p95",
+        "lightgbm_p99": "lightgbm_quantile_p99",
+        "xgb": "xgboost",
+        "xgboost_p90": "xgboost_quantile_p90",
+        "xgboost_p95": "xgboost_quantile_p95",
+        "xgboost_p99": "xgboost_quantile_p99",
+    }
+    selected_model = aliases.get(selected_model, selected_model)
+
+    def should_run(model_name: str) -> bool:
+        return not selected_model or model_name == selected_model
 
     def fit_or_resume(
         model_name: str,
@@ -1360,7 +1389,9 @@ def train_and_plot(
         predict_x: np.ndarray,
         predict_feature_names: list[str] | None = None,
     ) -> tuple[object | None, np.ndarray | None]:
-        model = load_saved_model(models_dir, model_name, model_signature)
+        if selected_model and model_name != selected_model:
+            return None, None
+        model = None if (force_model and selected_model == model_name) else load_saved_model(models_dir, model_name, model_signature)
         if model is not None:
             try:
                 prediction = predict_model(model, predict_x, predict_feature_names)
@@ -1540,7 +1571,8 @@ def train_and_plot(
         if quantile_preds:
             xgb_q_pred = np.mean(quantile_preds, axis=0)
             add_result("XGBoost Quantile (p90/p95/p99)", xgb_q_pred)
-
+    if selected_model and not results:
+        raise SystemExit(f"Modelo classico nao reconhecido ou indisponivel: {selected_model}")
 
     saved_model_paths = sorted(set(saved_model_paths))
 
@@ -1607,6 +1639,7 @@ def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
             result = train_and_plot(
                 paths, job["target"], Path(job["output_dir"]), args.test_fraction,
                 args.seed, args.knn_k, args.knn_train_limit, args.cv_folds,
+                args.only_model, args.force_model,
             )
         row = {"label": job["label"], "target": job["target"], **result}
         rows.append(row)

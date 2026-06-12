@@ -19,6 +19,8 @@ PRESERVED_ENV_VARS=(
   EVT_DECLUSTER_RUN_LENGTH
   EVT_RETURN_QUANTILES
   EVT_CACHE
+  EVT_MODEL_ONLY
+  EVT_FORCE_MODEL
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   if [[ -v "${var_name}" ]]; then
@@ -60,9 +62,18 @@ EVT_THRESHOLD_QUANTILE="${EVT_THRESHOLD_QUANTILE:-0.95}"
 EVT_DECLUSTER_RUN_LENGTH="${EVT_DECLUSTER_RUN_LENGTH:-50}"
 EVT_RETURN_QUANTILES="${EVT_RETURN_QUANTILES:-0.95 0.99 0.999}"
 EVT_CACHE="${EVT_CACHE:-true}"
+EVT_MODEL_ONLY="${EVT_MODEL_ONLY:-}"
+EVT_FORCE_MODEL="${EVT_FORCE_MODEL:-false}"
 EVT_CACHE_ARGS=()
 if [[ "${EVT_CACHE}" == "false" ]] || [[ "${EVT_CACHE}" == "0" ]]; then
   EVT_CACHE_ARGS+=(--no-cache)
+fi
+EVT_MODEL_ARGS=()
+if [[ -n "${EVT_MODEL_ONLY}" ]]; then
+  EVT_MODEL_ARGS+=(--only-model "${EVT_MODEL_ONLY}")
+fi
+if [[ "${EVT_FORCE_MODEL}" == "true" ]] || [[ "${EVT_FORCE_MODEL}" == "1" ]]; then
+  EVT_MODEL_ARGS+=(--force-model)
 fi
 
 matching_dirs() {
@@ -112,6 +123,7 @@ run_one() {
     --threshold-quantile "${EVT_THRESHOLD_QUANTILE}" \
     --decluster-run-length "${EVT_DECLUSTER_RUN_LENGTH}" \
     --return-quantiles ${EVT_RETURN_QUANTILES} \
+    "${EVT_MODEL_ARGS[@]}" \
     "${EVT_CACHE_ARGS[@]}"
 }
 

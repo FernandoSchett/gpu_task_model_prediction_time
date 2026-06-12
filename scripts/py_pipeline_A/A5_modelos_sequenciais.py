@@ -80,6 +80,8 @@ def parse_args() -> argparse.Namespace:
         default=env_flag("SEQUENCE_REQUIRE_GPU", True),
         help="Fail if --tf-device auto does not expose a TensorFlow GPU.",
     )
+    parser.add_argument("--only-model", choices=("lstm", "gru", "temporal_cnn"), default=os.getenv("SEQUENCE_MODEL_ONLY", ""))
+    parser.add_argument("--force-model", action="store_true", default=env_flag("SEQUENCE_FORCE_MODEL", False))
     parser.add_argument("--no-cache", action="store_true", help="Recompute even when sequential outputs already exist.")
     return parser.parse_args()
 
@@ -375,7 +377,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
     seq_output_dir.mkdir(parents=True, exist_ok=True)
     metadata_signature = expected_metadata(args, job, paths)
 
-    if not args.no_cache:
+    if not args.no_cache and not args.only_model and not args.force_model:
         cached = existing_sequential_result(job, paths, seq_output_dir, metadata_signature)
         if cached is not None:
             print(f"{job['label']} {job['target']}: cached sequential_models={seq_output_dir}")
@@ -419,20 +421,29 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
     if residual_metrics_path.exists():
         residual_metrics_path.unlink()
     for model_name, model in build_models(keras, args.sequence_length, train_x.shape[-1]).items():
-        history = model.fit(
-            train_x,
-            train_y,
-            validation_split=0.1,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            verbose=0,
-            shuffle=False,
-        )
-        prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
+        if args.only_model and model_name != args.only_model:
+            continue
+        model_path = seq_output_dir / f"{model_name}.keras"
+        if model_path.exists() and not args.force_model and not args.no_cache:
+            model = keras.models.load_model(model_path)
+            prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
+            history = None
+        else:
+            history = model.fit(
+                train_x,
+                train_y,
+                validation_split=0.1,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                verbose=0,
+                shuffle=False,
+            )
+            prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
         metric_row = REG.metrics(test_y, prediction)
         REG.plot_prediction_diagnostics(seq_output_dir, model_name, test_y, prediction)
-        plot_loss(seq_output_dir, model_name, history)
-        model.save(seq_output_dir / f"{model_name}.keras")
+        if history is not None:
+            plot_loss(seq_output_dir, model_name, history)
+            model.save(model_path)
         rows.append({
             "model": model_name,
             "MAE": f"{metric_row['MAE']:.6f}",
@@ -449,6 +460,8 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             "diagnostics_dir": str(diagnostics_dir),
         })
 
+    if not rows:
+        raise SystemExit(f"Modelo sequencial nao encontrado: {args.only_model}")
     metrics_path = seq_output_dir / "sequential_metrics.csv"
     write_metrics(metrics_path, rows)
     plot_sequential_metric_comparisons(seq_output_dir, rows)

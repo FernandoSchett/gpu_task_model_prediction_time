@@ -44,6 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decluster-run-length", type=int, default=int(os.getenv("EVT_DECLUSTER_RUN_LENGTH", "50")))
     parser.add_argument("--return-quantiles", nargs="+", type=float, default=[0.95, 0.99, 0.999])
     parser.add_argument("--no-cache", action="store_true", help="Recompute even when EVT outputs already exist.")
+    parser.add_argument("--only-model", choices=("gev", "gpd", "gumbel"), default=os.getenv("EVT_MODEL_ONLY", ""))
+    parser.add_argument("--force-model", action="store_true", default=os.getenv("EVT_FORCE_MODEL", "").lower() in {"1", "true", "yes", "on", "sim"})
     return parser.parse_args()
 
 
@@ -222,6 +224,7 @@ def existing_evt_result(
         output_dir / name
         for name in (
             "gev_hist_fit.png", "gev_qq.png", "gev_pp.png",
+            "gumbel_hist_fit.png", "gumbel_qq.png", "gumbel_pp.png",
             "gpd_hist_fit.png", "gpd_qq.png", "gpd_pp.png",
             "evt_return_levels.png",
         )
@@ -240,11 +243,14 @@ def existing_evt_result(
         return None
     values = {
         "gev_ks_pvalue": "",
+        "gumbel_ks_pvalue": "",
         "gpd_ks_pvalue": "",
     }
     for row in rows:
         if row.get("method") == "block_maxima_gev":
             values["gev_ks_pvalue"] = row.get("ks_pvalue", "")
+        elif row.get("method") == "block_maxima_gumbel":
+            values["gumbel_ks_pvalue"] = row.get("ks_pvalue", "")
         elif row.get("method") == "declustered_pot_gpd":
             values["gpd_ks_pvalue"] = row.get("ks_pvalue", "")
     return {
@@ -256,6 +262,7 @@ def existing_evt_result(
         "cluster_excesses": str(metadata.get("cluster_excesses", "")),
         "threshold": finite_or_empty(float(metadata.get("threshold", math.nan))),
         "gev_ks_pvalue": values["gev_ks_pvalue"],
+        "gumbel_ks_pvalue": values["gumbel_ks_pvalue"],
         "gpd_ks_pvalue": values["gpd_ks_pvalue"],
         "metrics_csv": str(metrics_path),
         "quantiles_csv": str(quantiles_path),
@@ -270,7 +277,7 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_signature = expected_metadata(args, job, paths)
 
-    if not args.no_cache:
+    if not args.no_cache and not args.only_model and not args.force_model:
         cached = existing_evt_result(job, paths, output_dir, metadata_signature)
         if cached is not None:
             print(f"{job['label']} {job['target']}: cached extreme_value={output_dir}")
@@ -289,13 +296,19 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
         raise SystemExit(f"Poucos clusters/excessos para {job['label']} {job['target']}.")
 
     gev_params = stats.genextreme.fit(maxima)
+    gumbel_params = stats.gumbel_r.fit(maxima)
     gpd_params = stats.genpareto.fit(excesses, floc=0.0)
     gev_ks = stats.kstest(maxima, "genextreme", args=gev_params)
+    gumbel_ks = stats.kstest(maxima, "gumbel_r", args=gumbel_params)
     gpd_ks = stats.kstest(excesses, "genpareto", args=gpd_params)
 
+    run_gev = args.only_model in ("", "gev")
+    run_gumbel = args.only_model in ("", "gumbel")
+    run_gpd = args.only_model in ("", "gpd")
     quantile_rows: list[dict[str, str]] = []
     for quantile in args.return_quantiles:
-        gev_value = float(stats.genextreme.ppf(quantile, *gev_params))
+        gev_value = float(stats.genextreme.ppf(quantile, *gev_params)) if run_gev else math.nan
+        gumbel_value = float(stats.gumbel_r.ppf(quantile, *gumbel_params)) if run_gumbel else math.nan
         if quantile <= args.threshold_quantile:
             gpd_value = threshold
             conditional_quantile = 0.0
@@ -303,24 +316,36 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
             conditional_quantile = (quantile - args.threshold_quantile) / (1.0 - args.threshold_quantile)
             conditional_quantile = min(max(conditional_quantile, 0.0), 1.0 - 1e-12)
             gpd_value = threshold + float(stats.genpareto.ppf(conditional_quantile, *gpd_params))
-        quantile_rows.append({
-            "method": "block_maxima_gev",
-            "quantile": f"{quantile:.6f}",
-            "predicted_value": finite_or_empty(gev_value),
-            "threshold": "",
-            "conditional_excess_quantile": "",
-            "block_size": str(args.block_size),
-            "decluster_run_length": "",
-        })
-        quantile_rows.append({
-            "method": "declustered_pot_gpd",
-            "quantile": f"{quantile:.6f}",
-            "predicted_value": finite_or_empty(gpd_value),
-            "threshold": finite_or_empty(threshold),
-            "conditional_excess_quantile": finite_or_empty(conditional_quantile),
-            "block_size": "",
-            "decluster_run_length": str(args.decluster_run_length),
-        })
+        if run_gev:
+            quantile_rows.append({
+                "method": "block_maxima_gev",
+                "quantile": f"{quantile:.6f}",
+                "predicted_value": finite_or_empty(gev_value),
+                "threshold": "",
+                "conditional_excess_quantile": "",
+                "block_size": str(args.block_size),
+                "decluster_run_length": "",
+            })
+        if run_gumbel:
+            quantile_rows.append({
+                "method": "block_maxima_gumbel",
+                "quantile": f"{quantile:.6f}",
+                "predicted_value": finite_or_empty(gumbel_value),
+                "threshold": "",
+                "conditional_excess_quantile": "",
+                "block_size": str(args.block_size),
+                "decluster_run_length": "",
+            })
+        if run_gpd:
+            quantile_rows.append({
+                "method": "declustered_pot_gpd",
+                "quantile": f"{quantile:.6f}",
+                "predicted_value": finite_or_empty(gpd_value),
+                "threshold": finite_or_empty(threshold),
+                "conditional_excess_quantile": finite_or_empty(conditional_quantile),
+                "block_size": "",
+                "decluster_run_length": str(args.decluster_run_length),
+            })
 
     write_csv(
         output_dir / "evt_quantile_estimates.csv",
@@ -331,8 +356,9 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
         ],
     )
 
-    metrics_rows = [
-        {
+    metrics_rows = []
+    if run_gev:
+        metrics_rows.append({
             "method": "block_maxima_gev",
             "samples": str(len(maxima)),
             "shape": finite_or_empty(float(gev_params[0])),
@@ -341,8 +367,20 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
             "threshold": "",
             "ks_statistic": finite_or_empty(float(gev_ks.statistic)),
             "ks_pvalue": finite_or_empty(float(gev_ks.pvalue)),
-        },
-        {
+        })
+    if run_gumbel:
+        metrics_rows.append({
+            "method": "block_maxima_gumbel",
+            "samples": str(len(maxima)),
+            "shape": "0",
+            "loc": finite_or_empty(float(gumbel_params[0])),
+            "scale": finite_or_empty(float(gumbel_params[1])),
+            "threshold": "",
+            "ks_statistic": finite_or_empty(float(gumbel_ks.statistic)),
+            "ks_pvalue": finite_or_empty(float(gumbel_ks.pvalue)),
+        })
+    if run_gpd:
+        metrics_rows.append({
             "method": "declustered_pot_gpd",
             "samples": str(len(excesses)),
             "shape": finite_or_empty(float(gpd_params[0])),
@@ -351,20 +389,25 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
             "threshold": finite_or_empty(threshold),
             "ks_statistic": finite_or_empty(float(gpd_ks.statistic)),
             "ks_pvalue": finite_or_empty(float(gpd_ks.pvalue)),
-        },
-    ]
+        })
     write_csv(
         output_dir / "evt_fit_metrics.csv",
         metrics_rows,
         ["method", "samples", "shape", "loc", "scale", "threshold", "ks_statistic", "ks_pvalue"],
     )
 
-    plot_hist_fit(output_dir, "gev", maxima, stats.genextreme, gev_params, "GEV sobre maximos de bloco")
-    plot_qq(output_dir, "gev", maxima, stats.genextreme, gev_params, "QQ plot - GEV")
-    plot_pp(output_dir, "gev", maxima, stats.genextreme, gev_params, "PP plot - GEV")
-    plot_hist_fit(output_dir, "gpd", excesses, stats.genpareto, gpd_params, "GPD sobre excessos declusterizados")
-    plot_qq(output_dir, "gpd", excesses, stats.genpareto, gpd_params, "QQ plot - GPD")
-    plot_pp(output_dir, "gpd", excesses, stats.genpareto, gpd_params, "PP plot - GPD")
+    if run_gev:
+        plot_hist_fit(output_dir, "gev", maxima, stats.genextreme, gev_params, "GEV sobre maximos de bloco")
+        plot_qq(output_dir, "gev", maxima, stats.genextreme, gev_params, "QQ plot - GEV")
+        plot_pp(output_dir, "gev", maxima, stats.genextreme, gev_params, "PP plot - GEV")
+    if run_gumbel:
+        plot_hist_fit(output_dir, "gumbel", maxima, stats.gumbel_r, gumbel_params, "Gumbel sobre maximos de bloco")
+        plot_qq(output_dir, "gumbel", maxima, stats.gumbel_r, gumbel_params, "QQ plot - Gumbel")
+        plot_pp(output_dir, "gumbel", maxima, stats.gumbel_r, gumbel_params, "PP plot - Gumbel")
+    if run_gpd:
+        plot_hist_fit(output_dir, "gpd", excesses, stats.genpareto, gpd_params, "GPD sobre excessos declusterizados")
+        plot_qq(output_dir, "gpd", excesses, stats.genpareto, gpd_params, "QQ plot - GPD")
+        plot_pp(output_dir, "gpd", excesses, stats.genpareto, gpd_params, "PP plot - GPD")
     plot_return_levels(output_dir, "evt", quantile_rows, "Estimativas de pior caso")
 
     metadata = {
@@ -385,6 +428,7 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
         "cluster_excesses": str(len(excesses)),
         "threshold": finite_or_empty(threshold),
         "gev_ks_pvalue": finite_or_empty(float(gev_ks.pvalue)),
+        "gumbel_ks_pvalue": finite_or_empty(float(gumbel_ks.pvalue)),
         "gpd_ks_pvalue": finite_or_empty(float(gpd_ks.pvalue)),
         "metrics_csv": str(output_dir / "evt_fit_metrics.csv"),
         "quantiles_csv": str(output_dir / "evt_quantile_estimates.csv"),
@@ -403,7 +447,7 @@ def main() -> int:
         rows,
         [
             "label", "target", "source_files", "rows_loaded", "block_maxima",
-            "cluster_excesses", "threshold", "gev_ks_pvalue", "gpd_ks_pvalue",
+            "cluster_excesses", "threshold", "gev_ks_pvalue", "gumbel_ks_pvalue", "gpd_ks_pvalue",
             "metrics_csv", "quantiles_csv", "output_dir", "cached",
         ],
     )
