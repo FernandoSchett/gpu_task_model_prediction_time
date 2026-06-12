@@ -22,13 +22,27 @@ echo "Atualizando pip e instalando dependencias do projeto..."
 "${PYTHON_BIN}" -m pip install -U pip
 "${PYTHON_BIN}" -m pip install -r requirements.txt
 
+CUDA_LIB_PATH="$("${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+import site
+
+paths = []
+for site_dir in [Path(path) for path in site.getsitepackages()]:
+    nvidia_dir = site_dir / "nvidia"
+    if nvidia_dir.exists():
+        paths.extend(str(path) for path in sorted(nvidia_dir.glob("*/lib")))
+print(":".join(paths))
+PY
+)"
+export LD_LIBRARY_PATH="${CUDA_LIB_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
+
 echo "Criando links das bibliotecas CUDA/cuDNN instaladas pelo pip para o TensorFlow..."
 "${PYTHON_BIN}" - <<'PY'
 from __future__ import annotations
 
 import pathlib
 import site
-import subprocess
 import sys
 
 import tensorflow as tf
@@ -61,14 +75,16 @@ except Exception:
 
 venv_bin = pathlib.Path(sys.prefix) / "bin"
 if cuda_nvcc is not None and venv_bin.exists():
-    nvcc_root = pathlib.Path(cuda_nvcc.__file__).resolve().parents[1]
-    candidates = list(nvcc_root.glob("*/bin/ptxas"))
-    if candidates:
-        target = venv_bin / "ptxas"
-        if target.exists() or target.is_symlink():
-            target.unlink()
-        target.symlink_to(candidates[0])
-        print(f"Link ptxas criado: {target} -> {candidates[0]}")
+    cuda_nvcc_file = getattr(cuda_nvcc, "__file__", None)
+    if cuda_nvcc_file:
+        nvcc_root = pathlib.Path(cuda_nvcc_file).resolve().parents[1]
+        candidates = list(nvcc_root.glob("*/bin/ptxas"))
+        if candidates:
+            target = venv_bin / "ptxas"
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            target.symlink_to(candidates[0])
+            print(f"Link ptxas criado: {target} -> {candidates[0]}")
 PY
 
 echo "Verificando GPUs visiveis no TensorFlow..."

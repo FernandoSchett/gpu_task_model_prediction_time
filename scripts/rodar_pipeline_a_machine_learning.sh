@@ -14,6 +14,7 @@ PRESERVED_ENV_VARS=(
   TARGETS
   GPU_TARGETS
   CV_FOLDS
+  MODEL_N_JOBS
   DEPENDENCY_ONLY
   DEPENDENCY_CACHE
   PIPELINE_A_CLASSICAL
@@ -60,6 +61,8 @@ ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
 TARGETS="${TARGETS:-response_time_us queueing_delay_us slowdown}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
+MODEL_N_JOBS="${MODEL_N_JOBS:--1}"
+export MODEL_N_JOBS
 DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
 DEPENDENCY_CACHE="${DEPENDENCY_CACHE:-true}"
 PIPELINE_A_CLASSICAL="${PIPELINE_A_CLASSICAL:-true}"
@@ -70,6 +73,21 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
   else
     PYTHON_BIN="python3"
   fi
+fi
+if [[ "${PYTHON_BIN}" == "${REPO_ROOT}/.venv/bin/python" ]]; then
+  CUDA_LIB_PATH="$("${PYTHON_BIN}" - <<'PY'
+from pathlib import Path
+import site
+
+paths = []
+for site_dir in [Path(path) for path in site.getsitepackages()]:
+    nvidia_dir = site_dir / "nvidia"
+    if nvidia_dir.exists():
+        paths.extend(str(path) for path in sorted(nvidia_dir.glob("*/lib")))
+print(":".join(paths))
+PY
+)"
+  export LD_LIBRARY_PATH="${CUDA_LIB_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 SEQUENCE_LENGTH="${SEQUENCE_LENGTH:-16}"
 SEQUENCE_STRIDE="${SEQUENCE_STRIDE:-1}"

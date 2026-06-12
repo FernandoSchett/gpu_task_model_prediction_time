@@ -237,6 +237,15 @@ def throttle_reasons_to_float(row: dict[str, str]) -> float:
     return 1.0
 
 
+def model_n_jobs() -> int:
+    value = os.getenv("MODEL_N_JOBS", "-1").strip()
+    try:
+        jobs = int(value)
+    except ValueError:
+        return -1
+    return jobs if jobs != 0 else -1
+
+
 def load_rows(results_dir: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for csv_path in sorted(results_dir.rglob("resultados_experimentos_*.csv")):
@@ -562,6 +571,8 @@ def train_knn(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, k: i
     params = dict(params or {})
     if "n_neighbors" not in params:
         params["n_neighbors"] = k
+    if "n_jobs" not in params:
+        params["n_jobs"] = model_n_jobs()
     params["n_neighbors"] = max(1, min(int(params["n_neighbors"]), len(train_y)))
     model = KNeighborsRegressor(**params)
     model.fit(train_x, train_y)
@@ -587,12 +598,12 @@ def train_lightgbm(
         "num_leaves": 31,
         "objective": objective,
         "random_state": seed,
-        "n_jobs": 1,
+        "n_jobs": model_n_jobs(),
         "verbose": -1,
     }
     if params:
         final_params.update(params)
-    final_params.update({"objective": objective, "random_state": seed, "n_jobs": 1, "verbose": -1})
+    final_params.update({"objective": objective, "random_state": seed, "n_jobs": model_n_jobs(), "verbose": -1})
     model = lgb.LGBMRegressor(**final_params)
     train_input = feature_frame(train_x, feature_names)
     test_input = feature_frame(test_x, feature_names)
@@ -618,12 +629,12 @@ def train_xgboost(
         "max_depth": 6,
         "objective": objective,
         "random_state": seed,
-        "n_jobs": 1,
+        "n_jobs": model_n_jobs(),
         "verbosity": 0,
     }
     if params:
         final_params.update(params)
-    final_params.update({"objective": objective, "random_state": seed, "n_jobs": 1, "verbosity": 0})
+    final_params.update({"objective": objective, "random_state": seed, "n_jobs": model_n_jobs(), "verbosity": 0})
     model = xgb.XGBRegressor(**final_params)
     train_input = feature_frame(train_x, feature_names)
     test_input = feature_frame(test_x, feature_names)
@@ -648,12 +659,12 @@ def train_catboost(
         "depth": 6,
         "random_state": seed,
         "verbose": 0,
-        "thread_count": 1,
+        "thread_count": model_n_jobs(),
         "allow_writing_files": False,
     }
     if params:
         final_params.update(params)
-    final_params.update({"random_state": seed, "verbose": 0, "thread_count": 1, "allow_writing_files": False})
+    final_params.update({"random_state": seed, "verbose": 0, "thread_count": model_n_jobs(), "allow_writing_files": False})
     model = CatBoostRegressor(**final_params)
     train_input = feature_frame(train_x, feature_names)
     test_input = feature_frame(test_x, feature_names)
@@ -681,12 +692,12 @@ def train_lightgbm_quantile(
         "objective": "quantile",
         "alpha": quantile,
         "random_state": seed,
-        "n_jobs": 1,
+        "n_jobs": model_n_jobs(),
         "verbose": -1,
     }
     if params:
         final_params.update(params)
-    final_params.update({"objective": "quantile", "alpha": quantile, "random_state": seed, "n_jobs": 1, "verbose": -1})
+    final_params.update({"objective": "quantile", "alpha": quantile, "random_state": seed, "n_jobs": model_n_jobs(), "verbose": -1})
     model = lgb.LGBMRegressor(**final_params)
     train_input = feature_frame(train_x, feature_names)
     test_input = feature_frame(test_x, feature_names)
@@ -713,12 +724,12 @@ def train_xgboost_quantile(
         "objective": "reg:quantileerror",
         "quantile_alpha": quantile,
         "random_state": seed,
-        "n_jobs": 1,
+        "n_jobs": model_n_jobs(),
         "verbosity": 0,
     }
     if params:
         final_params.update(params)
-    final_params.update({"objective": "reg:quantileerror", "quantile_alpha": quantile, "random_state": seed, "n_jobs": 1, "verbosity": 0})
+    final_params.update({"objective": "reg:quantileerror", "quantile_alpha": quantile, "random_state": seed, "n_jobs": model_n_jobs(), "verbosity": 0})
     model = xgb.XGBRegressor(**final_params)
     train_input = feature_frame(train_x, feature_names)
     test_input = feature_frame(test_x, feature_names)
@@ -1404,7 +1415,7 @@ def train_and_plot(
     add_result("Decision Tree", tree_pred)
 
     def train_random_forest():
-        model = RandomForestRegressor(n_estimators=60, max_depth=10, min_samples_leaf=100, random_state=seed, n_jobs=1)
+        model = RandomForestRegressor(n_estimators=60, max_depth=10, min_samples_leaf=100, random_state=seed, n_jobs=model_n_jobs())
         model.fit(train_x, train_y)
         return model, model.predict(test_x)
 

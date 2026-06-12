@@ -151,7 +151,7 @@ def make_sequences(
         raise SystemExit("--sequence-length precisa ser >= 2.")
     if stride < 1:
         raise SystemExit("--sequence-stride precisa ser >= 1.")
-    count = max(0, (len(y) - sequence_length) // stride + 1)
+    count = max(0, (len(y) - sequence_length - 1) // stride + 1)
     if count <= 0:
         return np.empty((0, sequence_length, x.shape[1]), dtype=float), np.empty((0,), dtype=float)
     indices = np.arange(0, count * stride, stride, dtype=int)
@@ -166,7 +166,7 @@ def make_sequences(
     for out_index, start in enumerate(indices):
         end = start + sequence_length
         seq_x[out_index] = x[start:end]
-        seq_y[out_index] = y[end - 1]
+        seq_y[out_index] = y[end]
     return seq_x, seq_y
 
 
@@ -274,7 +274,8 @@ def write_metrics(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "model", "MAE", "RMSE", "R2", "train_sequences", "test_sequences",
-        "sequence_length", "sequence_stride", "split_mode", "sample_mode", "diagnostics_dir",
+        "sequence_length", "sequence_stride", "prediction_horizon", "target_alignment",
+        "split_mode", "sample_mode", "diagnostics_dir",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
@@ -302,6 +303,8 @@ def expected_metadata(args: argparse.Namespace, job: dict[str, str], paths: list
         "source_paths": [str(path) for path in paths],
         "sequence_length": args.sequence_length,
         "sequence_stride": args.sequence_stride,
+        "prediction_horizon": 1,
+        "target_alignment": "next_kernel",
         "max_sequences": args.max_sequences,
         "test_fraction": args.test_fraction,
         "split_mode": args.split_mode,
@@ -439,6 +442,8 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             "test_sequences": str(len(test_y)),
             "sequence_length": str(args.sequence_length),
             "sequence_stride": str(args.sequence_stride),
+            "prediction_horizon": "1",
+            "target_alignment": "next_kernel",
             "split_mode": args.split_mode,
             "sample_mode": args.sample_mode,
             "diagnostics_dir": str(diagnostics_dir),
