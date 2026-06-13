@@ -12,10 +12,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-OUTPUT_DIR="${OUTPUT_DIR:-resultados}"
-EXPERIMENT_CONFIG="${EXPERIMENT_CONFIG:-sweep_padrao}"
-EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/${EXPERIMENT_CONFIG}.json}"
-TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-200}"
+EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/sweep_padrao.json}"
 RUN_TIMESTAMP_BASE="${RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 SEEDS="${SEEDS:-67 42}"
 RUN_PIPELINES="${RUN_PIPELINES:-true}"
@@ -24,6 +21,24 @@ if [[ ! -f "${EXPERIMENT_CONFIG_PATH}" ]]; then
   echo "Arquivo de configuracao de experimento nao encontrado: ${EXPERIMENT_CONFIG_PATH}" >&2
   exit 1
 fi
+
+eval "$(
+  python3 - "${EXPERIMENT_CONFIG_PATH}" <<'PY'
+import json
+import shlex
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as file:
+    config = json.load(file)
+
+if "output_dir" not in config:
+    raise SystemExit("Campo obrigatorio ausente no JSON: output_dir")
+
+print(f"OUTPUT_DIR={shlex.quote(str(config['output_dir']))}")
+print(f"CONFIG_NAME={shlex.quote(str(config.get('name', 'sweep')))}")
+PY
+)"
 
 TEMP_DIR="$(mktemp -d /tmp/sweeps_2seeds_XXXXXX)"
 trap 'rm -rf "${TEMP_DIR}"' EXIT
@@ -36,11 +51,11 @@ make_seed_config() {
   local telemetry="$2"
   local output_path="$3"
 
-  python3 - "${EXPERIMENT_CONFIG_PATH}" "${output_path}" "${seed}" "${telemetry}" "${TELEMETRY_INTERVAL_MS}" <<'PY'
+  python3 - "${EXPERIMENT_CONFIG_PATH}" "${output_path}" "${seed}" "${telemetry}" <<'PY'
 import json
 import sys
 
-source_path, target_path, seed, telemetry, telemetry_interval_ms = sys.argv[1:6]
+source_path, target_path, seed, telemetry = sys.argv[1:5]
 with open(source_path, "r", encoding="utf-8") as file:
     config = json.load(file)
 
@@ -49,7 +64,6 @@ if telemetry == "on":
     config["name"] = f"{config.get('name', 'sweep')}_telemetry"
     config["gpu_telemetry"] = "on"
     config["gpu_telemetry_during"] = "on"
-    config["telemetry_interval_ms"] = int(float(telemetry_interval_ms))
 else:
     config["gpu_telemetry"] = "off"
     config["gpu_telemetry_during"] = "off"
@@ -71,20 +85,17 @@ for seed in ${SEEDS}; do
 
   echo "Rodando sweep SEM telemetria com seed=${seed}..."
   RUN_TIMESTAMP="${normal_timestamp}" \
-  OUTPUT_DIR="${OUTPUT_DIR}" \
   EXPERIMENT_CONFIG_PATH="${normal_config}" \
   bash scripts/rodar_experimentos.sh
 
-  NORMAL_RESULTS_DIRS_LIST+=("${OUTPUT_DIR}/sweep_moderado_sem_estimativas_${normal_timestamp}")
+  NORMAL_RESULTS_DIRS_LIST+=("${OUTPUT_DIR}/${CONFIG_NAME}_${normal_timestamp}")
 
   echo "Rodando sweep COM telemetria com seed=${seed}..."
   RUN_TIMESTAMP="${telemetry_timestamp}" \
-  OUTPUT_DIR="${OUTPUT_DIR}" \
   EXPERIMENT_CONFIG_PATH="${telemetry_config}" \
-  TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS}" \
   bash scripts/rodar_experimentos.sh
 
-  TELEMETRY_RESULTS_DIRS_LIST+=("${OUTPUT_DIR}/sweep_moderado_sem_estimativas_telemetry_${telemetry_timestamp}")
+  TELEMETRY_RESULTS_DIRS_LIST+=("${OUTPUT_DIR}/${CONFIG_NAME}_telemetry_${telemetry_timestamp}")
 done
 
 NORMAL_RESULTS_DIRS="$(printf '%s ' "${NORMAL_RESULTS_DIRS_LIST[@]}")"

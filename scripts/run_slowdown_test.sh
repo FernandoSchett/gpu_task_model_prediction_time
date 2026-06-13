@@ -12,11 +12,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-SLOWDOWN_EXPERIMENT_CONFIG="${SLOWDOWN_EXPERIMENT_CONFIG:-slowdown_test}"
-SLOWDOWN_EXPERIMENT_CONFIG_PATH="${SLOWDOWN_EXPERIMENT_CONFIG_PATH:-experimentos/${SLOWDOWN_EXPERIMENT_CONFIG}.json}"
-GPU_TELEMETRY="${GPU_TELEMETRY:-}"
-GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-}"
-TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-}"
+SLOWDOWN_EXPERIMENT_CONFIG_PATH="${SLOWDOWN_EXPERIMENT_CONFIG_PATH:-experimentos/slowdown_test.json}"
 BLOCK_ID="${BLOCK_ID:-0}"
 REPETITION_ID="${REPETITION_ID:-}"
 
@@ -40,19 +36,25 @@ def optional_bash_scalar(name, value):
     if value is not None:
         print(f"{name}={shlex.quote(str(value))}")
 
+def require(name):
+    if name not in config:
+        raise SystemExit(f"Campo obrigatorio ausente no JSON: {name}")
+    return config[name]
 
-optional_bash_scalar("JSON_GPU_TELEMETRY", config.get("gpu_telemetry"))
-optional_bash_scalar("JSON_GPU_TELEMETRY_DURING", config.get("gpu_telemetry_during"))
-optional_bash_scalar("JSON_TELEMETRY_INTERVAL_MS", config.get("telemetry_interval_ms"))
+
+optional_bash_scalar("OUTPUT_DIR", require("output_dir"))
+optional_bash_scalar("DEFAULT_DEVICE", require("default_device"))
+optional_bash_scalar("SYNC_MODE", require("sync_mode"))
+optional_bash_scalar("WARMUP_KERNELS", require("warmup_kernels"))
+optional_bash_scalar("FLUSH_EVERY", require("flush_every"))
+optional_bash_scalar("GPU_TELEMETRY", require("gpu_telemetry"))
+optional_bash_scalar("GPU_TELEMETRY_DURING", require("gpu_telemetry_during"))
+optional_bash_scalar("TELEMETRY_INTERVAL_MS", require("telemetry_interval_ms"))
 PY
 )"
 
-GPU_TELEMETRY="${JSON_GPU_TELEMETRY:-${GPU_TELEMETRY:-on}}"
-GPU_TELEMETRY_DURING="${JSON_GPU_TELEMETRY_DURING:-${GPU_TELEMETRY_DURING:-off}}"
-TELEMETRY_INTERVAL_MS="${JSON_TELEMETRY_INTERVAL_MS:-${TELEMETRY_INTERVAL_MS:-1000}}"
-
 make
-mkdir -p resultados
+mkdir -p "${OUTPUT_DIR}"
 
 echo "Usando configuracao de slowdown: ${SLOWDOWN_EXPERIMENT_CONFIG_PATH}"
 echo "Telemetria GPU: gpu_telemetry=${GPU_TELEMETRY}, gpu_telemetry_during=${GPU_TELEMETRY_DURING}, telemetry_interval_ms=${TELEMETRY_INTERVAL_MS}"
@@ -78,11 +80,13 @@ while IFS=$'\t' read -r \
   BLOCK_ID_COUNTER=$((BLOCK_ID_COUNTER + 1))
   repetition_id="${REPETITION_ID:-${seed}}"
 
-  mkdir -p "resultados/${experiment_name}"
-  echo "Running ${experiment_name} -> resultados/${experiment_name} (block_id=${block_id}, repetition_id=${repetition_id})"
+  mkdir -p "${OUTPUT_DIR}/${experiment_name}"
+  echo "Running ${experiment_name} -> ${OUTPUT_DIR}/${experiment_name} (block_id=${block_id}, repetition_id=${repetition_id})"
   mpirun -np "${mpi_ranks}" ./main \
     --threads-per-process "${threads_per_process}" \
     --kernels-per-thread "${kernels_per_thread}" \
+    --warmup-kernels "${WARMUP_KERNELS}" \
+    --flush-every "${FLUSH_EVERY}" \
     --arrival-min-ms "${arrival_min_ms}" \
     --arrival-max-ms "${arrival_max_ms}" \
     --kernel-min-us "${kernel_min_us}" \
@@ -94,6 +98,9 @@ while IFS=$'\t' read -r \
     --repetition-id "${repetition_id}" \
     --block-id "${block_id}" \
     --experiment-name "${experiment_name}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --device "${DEFAULT_DEVICE}" \
+    --sync-mode "${SYNC_MODE}" \
     --gpu-telemetry "${GPU_TELEMETRY}" \
     --gpu-telemetry-during "${GPU_TELEMETRY_DURING}" \
     --telemetry-interval-ms "${TELEMETRY_INTERVAL_MS}" \

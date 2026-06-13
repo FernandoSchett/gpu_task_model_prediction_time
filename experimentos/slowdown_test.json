@@ -1,6 +1,11 @@
 {
   "name": "slowdown_test",
   "description": "Teste simples baseline vs stress para medir slowdown e comparar p95.",
+  "output_dir": "resultados",
+  "default_device": 0,
+  "sync_mode": "blocking",
+  "flush_every": 1000,
+  "warmup_kernels": 20,
   "gpu_telemetry": "on",
   "gpu_telemetry_during": "on",
   "telemetry_interval_ms": 200,

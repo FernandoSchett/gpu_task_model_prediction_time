@@ -6,19 +6,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 PRESERVED_ENV_VARS=(
-  OUTPUT_DIR
   SWEEP_OUTPUT_DIR
   RUN_TIMESTAMP
   BLOCK_ID
   REPETITION_ID
-  DEFAULT_DEVICE
-  SYNC_MODE
-  WARMUP_KERNELS
-  FLUSH_EVERY
-  GPU_TELEMETRY
-  GPU_TELEMETRY_DURING
-  TELEMETRY_INTERVAL_MS
-  EXPERIMENT_CONFIG
   EXPERIMENT_CONFIG_PATH
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
@@ -46,16 +37,7 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   fi
 done
 
-OUTPUT_DIR="${OUTPUT_DIR:-resultados}"
-DEFAULT_DEVICE="${DEFAULT_DEVICE:-0}"
-SYNC_MODE="${SYNC_MODE:-blocking}"
-WARMUP_KERNELS="${WARMUP_KERNELS:-20}"
-FLUSH_EVERY="${FLUSH_EVERY:-1000}"
-GPU_TELEMETRY="${GPU_TELEMETRY:-}"
-GPU_TELEMETRY_DURING="${GPU_TELEMETRY_DURING:-}"
-TELEMETRY_INTERVAL_MS="${TELEMETRY_INTERVAL_MS:-}"
-EXPERIMENT_CONFIG="${EXPERIMENT_CONFIG:-sweep_padrao}"
-EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/${EXPERIMENT_CONFIG}.json}"
+EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/sweep_padrao.json}"
 
 if [[ ! -f "${EXPERIMENT_CONFIG_PATH}" ]]; then
   echo "Arquivo de configuracao de experimento nao encontrado: ${EXPERIMENT_CONFIG_PATH}" >&2
@@ -110,11 +92,15 @@ def kernel_range_value(item):
 
 bash_array("SEEDS", require("seeds"))
 bash_scalar("CONFIG_NAME", config.get("name", path.rsplit("/", 1)[-1].rsplit(".", 1)[0]))
+bash_scalar("OUTPUT_DIR", require("output_dir"))
+bash_scalar("DEFAULT_DEVICE", require("default_device"))
+bash_scalar("SYNC_MODE", require("sync_mode"))
 bash_scalar("KERNELS_PER_THREAD", require("kernels_per_thread"))
-optional_bash_scalar("WARMUP_KERNELS", config.get("warmup_kernels"))
-optional_bash_scalar("JSON_GPU_TELEMETRY", config.get("gpu_telemetry"))
-optional_bash_scalar("JSON_GPU_TELEMETRY_DURING", config.get("gpu_telemetry_during"))
-optional_bash_scalar("JSON_TELEMETRY_INTERVAL_MS", config.get("telemetry_interval_ms"))
+bash_scalar("WARMUP_KERNELS", require("warmup_kernels"))
+bash_scalar("FLUSH_EVERY", require("flush_every"))
+bash_scalar("GPU_TELEMETRY", require("gpu_telemetry"))
+bash_scalar("GPU_TELEMETRY_DURING", require("gpu_telemetry_during"))
+bash_scalar("TELEMETRY_INTERVAL_MS", require("telemetry_interval_ms"))
 bash_array("BLOCKS_X", require("blocks_x"))
 bash_array("THREADS_PER_BLOCK", require("threads_per_block"))
 bash_scalar("GRID_Z", require("grid_z"))
@@ -154,9 +140,6 @@ else:
 PY
 )"
 
-GPU_TELEMETRY="${JSON_GPU_TELEMETRY:-${GPU_TELEMETRY:-on}}"
-GPU_TELEMETRY_DURING="${JSON_GPU_TELEMETRY_DURING:-${GPU_TELEMETRY_DURING:-off}}"
-TELEMETRY_INTERVAL_MS="${JSON_TELEMETRY_INTERVAL_MS:-${TELEMETRY_INTERVAL_MS:-1000}}"
 RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 SWEEP_OUTPUT_DIR="${SWEEP_OUTPUT_DIR:-${OUTPUT_DIR}/${CONFIG_NAME}_${RUN_TIMESTAMP}}"
 

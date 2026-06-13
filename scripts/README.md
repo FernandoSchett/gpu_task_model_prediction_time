@@ -198,6 +198,10 @@ bash scripts/rodar_todas_pipelines.sh
 
 Estes scripts nao sao pipelines de analise; eles geram dados brutos:
 
+Parametros de coleta ficam nos JSONs em `experimentos/`, nao no `.env`. Exemplos:
+`output_dir`, `default_device`, `sync_mode`, `warmup_kernels`, `flush_every`,
+`gpu_telemetry`, `gpu_telemetry_during`, `telemetry_interval_ms` e `seeds`.
+
 | Script | Uso |
 | --- | --- |
 | `rodar_experimentos.sh` | Executa um sweep bruto a partir do JSON de configuracao. |

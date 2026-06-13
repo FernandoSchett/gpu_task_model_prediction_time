@@ -1,6 +1,10 @@
 {
   "name": "sweep_moderado_sem_estimativas",
   "description": "Sweep principal em escala de microssegundos, recalibrado pelo slowdown_test para cobrir demanda aproximada de GPU em regimes leve, medio, saturado e acima da capacidade.",
+  "output_dir": "resultados",
+  "default_device": 0,
+  "sync_mode": "blocking",
+  "flush_every": 1000,
   "gpu_telemetry": "off",
   "gpu_telemetry_during": "off",
   "telemetry_interval_ms": 1000,
