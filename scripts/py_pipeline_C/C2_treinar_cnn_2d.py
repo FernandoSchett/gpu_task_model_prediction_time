@@ -74,7 +74,7 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
 
 
 def train_test_split(x: np.ndarray, y: np.ndarray, test_fraction: float, seed: int):
-    indices = np.arange(len(y))
+    indices = np.arange(len(y), dtype=np.int64)
     rng = np.random.default_rng(seed)
     rng.shuffle(indices)
     test_size = max(1, int(round(len(indices) * test_fraction)))
@@ -82,15 +82,82 @@ def train_test_split(x: np.ndarray, y: np.ndarray, test_fraction: float, seed: i
     train_idx = indices[test_size:]
     if len(train_idx) == 0:
         raise SystemExit("Poucas amostras para treino/teste na Pipeline C.")
-    return x[train_idx], x[test_idx], y[train_idx], y[test_idx]
+    return train_idx, test_idx
 
 
-def standardize(train_x: np.ndarray, test_x: np.ndarray):
-    axes = (0, 1, 2)
-    mean = train_x.mean(axis=axes, keepdims=True)
-    scale = train_x.std(axis=axes, keepdims=True)
+def split_train_validation(train_idx: np.ndarray, seed: int, validation_fraction: float = 0.1) -> tuple[np.ndarray, np.ndarray]:
+    if len(train_idx) < 2:
+        raise SystemExit("Poucas amostras para separar validacao.")
+    rng = np.random.default_rng(seed + 1)
+    shuffled = np.array(train_idx, copy=True)
+    rng.shuffle(shuffled)
+    val_size = max(1, int(round(len(shuffled) * validation_fraction)))
+    return shuffled[val_size:], shuffled[:val_size]
+
+
+def standardization_stats(x: np.ndarray, indices: np.ndarray, batch_size: int) -> tuple[np.ndarray, np.ndarray]:
+    total = 0
+    sum_values: np.ndarray | None = None
+    sumsq_values: np.ndarray | None = None
+    for start in range(0, len(indices), batch_size):
+        batch_idx = indices[start:start + batch_size]
+        batch = np.asarray(x[batch_idx], dtype=np.float32)
+        axes = (0, 1, 2)
+        batch_sum = batch.sum(axis=axes, keepdims=True, dtype=np.float64)
+        batch64 = batch.astype(np.float64, copy=False)
+        batch_sumsq = np.square(batch64).sum(axis=axes, keepdims=True)
+        count = batch.shape[0] * batch.shape[1] * batch.shape[2]
+        if sum_values is None:
+            sum_values = batch_sum
+            sumsq_values = batch_sumsq
+        else:
+            sum_values += batch_sum
+            sumsq_values += batch_sumsq
+        total += count
+    if total == 0 or sum_values is None or sumsq_values is None:
+        raise SystemExit("Nenhuma amostra para normalizacao CNN2D.")
+    mean = sum_values / float(total)
+    variance = np.maximum((sumsq_values / float(total)) - (mean * mean), 0.0)
+    scale = np.sqrt(variance)
     scale[scale == 0.0] = 1.0
-    return (train_x - mean) / scale, (test_x - mean) / scale, mean, scale
+    return mean.astype(np.float32), scale.astype(np.float32)
+
+
+class MemmapSequence:
+    def __init__(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        indices: np.ndarray,
+        batch_size: int,
+        mean: np.ndarray,
+        scale: np.ndarray,
+        shuffle: bool,
+        seed: int,
+    ):
+        self.x = x
+        self.y = y
+        self.indices = np.array(indices, dtype=np.int64, copy=True)
+        self.batch_size = batch_size
+        self.mean = mean
+        self.scale = scale
+        self.shuffle = shuffle
+        self.rng = np.random.default_rng(seed)
+        self.on_epoch_end()
+
+    def __len__(self) -> int:
+        return int(math.ceil(len(self.indices) / self.batch_size))
+
+    def __getitem__(self, index: int):
+        batch_idx = self.indices[index * self.batch_size:(index + 1) * self.batch_size]
+        batch_x = np.asarray(self.x[batch_idx], dtype=np.float32)
+        batch_x = (batch_x - self.mean) / self.scale
+        batch_y = np.asarray(self.y[batch_idx], dtype=np.float32)
+        return batch_x, batch_y
+
+    def on_epoch_end(self) -> None:
+        if self.shuffle:
+            self.rng.shuffle(self.indices)
 
 
 def architecture_grid(max_architectures: int) -> list[dict[str, float | int | str]]:
@@ -239,9 +306,21 @@ def merge_metric_rows(old_rows: list[dict[str, str]], new_rows: list[dict[str, s
     return sorted(merged.values(), key=lambda row: (-float(row["R2"]), float(row["RMSE"]), row["architecture"]))
 
 
-def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[dict[str, str]]:
+def load_dataset(row: dict[str, str]) -> tuple[np.ndarray, np.ndarray, Path]:
     tensor_path = Path(row["tensor_path"])
-    output_dir = tensor_path.parent
+    y_path_value = row.get("y_path", "")
+    if y_path_value:
+        x = np.load(tensor_path, mmap_mode="r")
+        y = np.load(Path(y_path_value), mmap_mode="r")
+        return x, y, tensor_path.parent
+    data = np.load(tensor_path)
+    x = data["x"].astype(np.float32)
+    y = data["y"].astype(np.float32)
+    return x, y, tensor_path.parent
+
+
+def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[dict[str, str]]:
+    x, y, output_dir = load_dataset(row)
     models_dir = output_dir / "trained_models"
     plots_dir = output_dir / "model_diagnostics"
     predictions_dir = output_dir / "predictions"
@@ -249,11 +328,17 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
     plots_dir.mkdir(parents=True, exist_ok=True)
     predictions_dir.mkdir(parents=True, exist_ok=True)
 
-    data = np.load(tensor_path)
-    x = data["x"].astype(np.float32)
-    y = data["y"].astype(np.float32)
-    train_x, test_x, train_y, test_y = train_test_split(x, y, args.test_fraction, args.seed)
-    train_x, test_x, mean, scale = standardize(train_x, test_x)
+    train_idx, test_idx = train_test_split(x, y, args.test_fraction, args.seed)
+    fit_idx, val_idx = split_train_validation(train_idx, args.seed)
+    mean, scale = standardization_stats(x, fit_idx, args.batch_size)
+
+    class KerasMemmapSequence(MemmapSequence, keras.utils.Sequence):
+        pass
+
+    train_seq = KerasMemmapSequence(x, y, fit_idx, args.batch_size, mean, scale, True, args.seed)
+    val_seq = KerasMemmapSequence(x, y, val_idx, args.batch_size, mean, scale, False, args.seed)
+    test_seq = KerasMemmapSequence(x, y, test_idx, args.batch_size, mean, scale, False, args.seed)
+    test_y = np.asarray(y[test_idx], dtype=np.float32)
 
     preprocessing_path = models_dir / "cnn2d_preprocessing.npz"
     np.savez_compressed(preprocessing_path, mean=mean, scale=scale)
@@ -269,7 +354,7 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
         use_cache = not args.no_cache and not args.force_model
         if use_cache and model_path.exists():
             model = keras.models.load_model(model_path)
-            prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
+            prediction = model.predict(test_seq, verbose=0).reshape(-1)
             metric_row = metrics(test_y, prediction)
             cached = True
             if not metrics_path.exists():
@@ -280,24 +365,21 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
                     f"Modelo CNN2D ausente para plots-only: {model_path}. "
                     "Rode sem CNN2D_PLOTS_ONLY ou treine esta arquitetura primeiro."
                 )
-            model = build_model(keras, tuple(train_x.shape[1:]), params)
+            model = build_model(keras, tuple(x.shape[1:]), params)
             history = model.fit(
-                train_x,
-                train_y,
-                validation_split=0.1,
+                train_seq,
+                validation_data=val_seq,
                 epochs=args.epochs,
-                batch_size=args.batch_size,
                 verbose=0,
-                shuffle=False,
             )
-            prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
+            prediction = model.predict(test_seq, verbose=0).reshape(-1)
             metric_row = metrics(test_y, prediction)
             model.save(model_path)
             metadata_path.write_text(
                 json.dumps(
                     {
                         "architecture": params,
-                        "input_shape": list(train_x.shape[1:]),
+                        "input_shape": list(x.shape[1:]),
                         "target_alignment": "next_kernel",
                         "preprocessing_path": str(preprocessing_path),
                     },
@@ -319,7 +401,7 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
             "MAE": f"{metric_row['MAE']:.6f}",
             "RMSE": f"{metric_row['RMSE']:.6f}",
             "R2": f"{metric_row['R2']:.6f}",
-            "train_samples": str(len(train_y)),
+            "train_samples": str(len(fit_idx)),
             "test_samples": str(len(test_y)),
             "workers": row["workers"],
             "window_size": row["window_size"],

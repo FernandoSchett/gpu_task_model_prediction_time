@@ -35,7 +35,7 @@ Arquivos Python da Pipeline A ficam em `scripts/py_pipeline_A/`:
 | `py_pipeline_A/A2_regressores_classicos.py` | Treina/reaproveita regressores classicos e gera metricas/graficos. Tambem gera dependencia quando `DEPENDENCY_ONLY=true`. |
 | `py_pipeline_A/A3_rankings_regressores.py` | Wrapper de compatibilidade para o comparador central de modelos. |
 | `py_pipeline_A/A4_rankings_dependencia.py` | Gera rankings de dependencia quando a analise de dependencia foi rodada. |
-| `py_pipeline_A/A5_modelos_sequenciais.py` | Treina/reaproveita LSTM, GRU e Temporal CNN. |
+| `py_pipeline_A/A5_modelos_sequenciais.py` | Treina/reaproveita LSTM, GRU e Temporal CNN hibridos: historico anterior + features do kernel atual. |
 | `py_pipeline_A/A7_usar_modelos_treinados.py` | Usa modelos ja treinados para inferencia. |
 
 Auxiliares fora da Pipeline A ficam em `scripts/py_outros/`:
@@ -75,6 +75,8 @@ Rodar novamente apenas um modelo sequencial, ignorando cache:
 ```bash
 PIPELINE_A_CLASSICAL=false SEQUENCE_MODEL_ONLY=lstm SEQUENCE_FORCE_MODEL=true bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
+
+Os sequenciais usam janelas separadas por arquivo de origem, ordenadas por `submit_time_ns`, `execution_order` e `completion_time_ns`. A entrada do modelo e `historico anterior + features do kernel atual`, e o alvo e o tempo do kernel atual.
 
 Por padrao, os sequenciais usam `SEQUENCE_SPLIT_MODE=random` para ficarem comparaveis aos regressores classicos, que tambem usam split aleatorio. Para testar generalizacao temporal mais dificil:
 
@@ -158,7 +160,7 @@ Variaveis principais:
 
 ```bash
 CNN2D_WINDOW_SIZE=32
-CNN2D_MAX_SAMPLES=120000
+CNN2D_MAX_SAMPLES=0
 CNN2D_MAX_ARCHITECTURES=8
 CNN2D_EPOCHS=8
 CNN2D_CACHE=true
@@ -166,6 +168,8 @@ CNN2D_MODEL_ONLY=
 CNN2D_FORCE_MODEL=false
 CNN2D_PLOTS_ONLY=false
 ```
+
+`CNN2D_MAX_SAMPLES=0` significa sem limite de linhas/janelas. O preprocessamento salva `cnn2d_x.npy` e `cnn2d_y.npy` como memmap em disco para nao estourar RAM.
 
 Forcar recalculo:
 

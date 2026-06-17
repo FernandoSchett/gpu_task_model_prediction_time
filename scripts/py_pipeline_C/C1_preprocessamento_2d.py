@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs-file", type=Path, required=True)
     parser.add_argument("--window-size", type=int, default=int(os.getenv("CNN2D_WINDOW_SIZE", "32")))
     parser.add_argument("--stride", type=int, default=int(os.getenv("CNN2D_STRIDE", "1")))
-    parser.add_argument("--max-samples", type=int, default=int(os.getenv("CNN2D_MAX_SAMPLES", "120000")))
+    parser.add_argument("--max-samples", type=int, default=int(os.getenv("CNN2D_MAX_SAMPLES", "0")))
     parser.add_argument(
         "--sample-mode",
         choices=("random", "linspace"),
@@ -86,6 +86,7 @@ def signature(args: argparse.Namespace, job: dict[str, str], paths: list[Path]) 
         "sample_mode": args.sample_mode,
         "features": FEATURES,
         "target_alignment": "next_kernel",
+        "storage": "npy_memmap",
     }
 
 
@@ -160,33 +161,36 @@ def build_tensor_dataset(
     max_samples: int,
     seed: int,
     sample_mode: str,
-) -> tuple[np.ndarray, np.ndarray]:
+    x_path: Path,
+    y_path: Path,
+) -> tuple[tuple[int, int, int, int], int]:
     if window_size < 2:
         raise SystemExit("--window-size precisa ser >= 2.")
     if stride < 1:
         raise SystemExit("--stride precisa ser >= 1.")
     count = max(0, (len(events) - window_size - 1) // stride + 1)
     if count <= 0:
-        return (
-            np.empty((0, workers, window_size, len(FEATURES)), dtype=np.float32),
-            np.empty((0,), dtype=np.float32),
-        )
+        return (0, workers, window_size, len(FEATURES)), 0
     starts = choose_starts(count, stride, max_samples, seed, sample_mode)
-    x = np.zeros((len(starts), workers, window_size, len(FEATURES)), dtype=np.float32)
-    y = np.empty((len(starts),), dtype=np.float32)
+    shape = (len(starts), workers, window_size, len(FEATURES))
+    x = np.lib.format.open_memmap(x_path, mode="w+", dtype=np.float32, shape=shape)
+    y = np.lib.format.open_memmap(y_path, mode="w+", dtype=np.float32, shape=(len(starts),))
     for out_index, start in enumerate(starts):
         end = start + window_size
+        x[out_index].fill(0.0)
         for temporal_index, event in enumerate(events[start:end]):
             x[out_index, int(event["worker"]), temporal_index, :] = event["x"]
         y[out_index] = float(events[end]["y"])
-    return x, y
+    x.flush()
+    y.flush()
+    return shape, len(starts)
 
 
 def write_summary(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "label", "target", "source_files", "rows_loaded", "events_used", "workers",
-        "samples", "window_size", "stride", "features", "tensor_path", "metadata_path", "cached",
+        "samples", "window_size", "stride", "features", "tensor_path", "y_path", "metadata_path", "cached",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
@@ -200,12 +204,13 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
         raise SystemExit(f"Nenhum CSV encontrado para {job['label']} {job['target']}")
     output_dir = Path(job["output_dir"]) / "2d_models"
     output_dir.mkdir(parents=True, exist_ok=True)
-    tensor_path = output_dir / "cnn2d_dataset.npz"
+    tensor_path = output_dir / "cnn2d_x.npy"
+    y_path = output_dir / "cnn2d_y.npy"
     metadata_path = output_dir / "cnn2d_dataset_metadata.json"
     expected = signature(args, job, paths)
     expected_hash = hash_signature(expected)
 
-    if not args.no_cache and tensor_path.exists() and metadata_path.exists():
+    if not args.no_cache and tensor_path.exists() and y_path.exists() and metadata_path.exists():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             if metadata.get("signature_hash") == expected_hash:
@@ -221,6 +226,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
                     "stride": str(args.stride),
                     "features": str(len(FEATURES)),
                     "tensor_path": str(tensor_path),
+                    "y_path": str(metadata.get("y_path", y_path)),
                     "metadata_path": str(metadata_path),
                     "cached": "true",
                 }
@@ -230,7 +236,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
     events, workers, rows_loaded = load_events(paths, job["target"])
     if not events:
         raise SystemExit(f"Nenhum evento valido para {job['label']} {job['target']}")
-    x, y = build_tensor_dataset(
+    tensor_shape, sample_count = build_tensor_dataset(
         events,
         workers,
         args.window_size,
@@ -238,10 +244,11 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
         args.max_samples,
         args.seed,
         args.sample_mode,
+        tensor_path,
+        y_path,
     )
-    if len(y) == 0:
+    if sample_count == 0:
         raise SystemExit(f"Nenhuma janela valida para {job['label']} {job['target']}")
-    np.savez_compressed(tensor_path, x=x, y=y)
     metadata = {
         **expected,
         "signature_hash": expected_hash,
@@ -249,10 +256,12 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
         "rows_loaded": rows_loaded,
         "events_used": len(events),
         "workers": workers,
-        "samples": int(len(y)),
+        "samples": int(sample_count),
         "feature_count": len(FEATURES),
-        "tensor_shape": list(x.shape),
+        "tensor_shape": list(tensor_shape),
         "tensor_path": str(tensor_path),
+        "y_path": str(y_path),
+        "storage": "npy_memmap",
     }
     metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return {
@@ -267,6 +276,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
         "stride": str(args.stride),
         "features": str(len(FEATURES)),
         "tensor_path": str(tensor_path),
+        "y_path": str(y_path),
         "metadata_path": str(metadata_path),
         "cached": "false",
     }

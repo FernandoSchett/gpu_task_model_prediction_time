@@ -120,7 +120,7 @@ Scripts:
 - `scripts/py_pipeline_A/A2_regressores_classicos.py`: regressores classicos, dependencia, metricas e graficos.
 - `scripts/py_pipeline_A/A3_rankings_regressores.py`: wrapper do comparador central.
 - `scripts/py_pipeline_A/A4_rankings_dependencia.py`: rankings de dependencia.
-- `scripts/py_pipeline_A/A5_modelos_sequenciais.py`: LSTM, GRU e Temporal CNN.
+- `scripts/py_pipeline_A/A5_modelos_sequenciais.py`: LSTM, GRU e Temporal CNN hibridos.
 - `scripts/py_pipeline_A/A7_usar_modelos_treinados.py`: inferencia usando modelos treinados.
 
 Saidas por alvo:
@@ -133,6 +133,13 @@ Saidas por alvo:
   model_diagnostics/
   sequential_models/
 ```
+
+Modelagem sequencial:
+
+- Sequencias sao agrupadas por arquivo CSV de origem para nao cruzar experimentos independentes.
+- Dentro de cada grupo, eventos sao ordenados por `submit_time_ns`, `execution_order`, `completion_time_ns` e indice da linha.
+- Entrada dos modelos: historico dos kernels anteriores + features do kernel atual.
+- Alvo: valor do kernel atual (`response_time_us`, `queueing_delay_us` ou `slowdown`).
 
 Rankings locais da Pipeline A:
 
@@ -199,6 +206,8 @@ Saidas por alvo:
 <condicao>/<recorte>/<target>/2d_models/
   cnn2d_dataset.npz
   cnn2d_dataset_metadata.json
+  cnn2d_x.npy
+  cnn2d_y.npy
   cnn2d_architecture_metrics.csv
   trained_models/
     *.keras

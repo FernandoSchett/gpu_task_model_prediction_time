@@ -120,78 +120,125 @@ def load_jobs(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(file))
 
 
-def load_ordered_matrix(paths: list[Path], target: str) -> tuple[np.ndarray, np.ndarray]:
-    x_rows: list[list[float]] = []
-    y_values: list[float] = []
+def row_order_key(row: dict[str, str], row_index: int) -> tuple[float, float, float, int]:
+    submit_time = REG.to_float(row, "submit_time_ns", math.nan)
+    if not math.isfinite(submit_time):
+        submit_time = REG.to_float(row, "time_since_experiment_start_us", float(row_index))
+    execution_order = REG.to_float(row, "execution_order", math.nan)
+    if not math.isfinite(execution_order):
+        execution_order = REG.to_float(row, "rank_local_submitted_count", float(row_index))
+    completion_time = REG.to_float(row, "completion_time_ns", math.nan)
+    if not math.isfinite(completion_time):
+        completion_time = submit_time
+    return submit_time, execution_order, completion_time, row_index
+
+
+def load_grouped_events(paths: list[Path], target: str) -> tuple[list[tuple[np.ndarray, np.ndarray]], int, int]:
+    groups: list[tuple[np.ndarray, np.ndarray]] = []
+    rows_loaded = 0
+    events_used = 0
     for path in paths:
+        events: list[tuple[tuple[float, float, float, int], list[float], float]] = []
         with path.open("r", encoding="utf-8", newline="") as file:
             reader = csv.DictReader(file)
             if reader.fieldnames is None or "response_time_us" not in reader.fieldnames:
                 continue
-            for row in reader:
+            for row_index, row in enumerate(reader):
+                rows_loaded += 1
                 if REG.to_float(row, "cuda_error_code", 0.0) != 0.0:
                     continue
                 values = REG.row_features_compare(row)
                 y = values[target] if target in values else REG.to_float(row, target)
                 x = [values[name] for name in FEATURES]
                 if math.isfinite(y) and all(math.isfinite(value) for value in x):
-                    x_rows.append(x)
-                    y_values.append(y)
-    return np.asarray(x_rows, dtype=float), np.asarray(y_values, dtype=float)
+                    events.append((row_order_key(row, row_index), x, y))
+        events.sort(key=lambda item: item[0])
+        if events:
+            groups.append((
+                np.asarray([event[1] for event in events], dtype=float),
+                np.asarray([event[2] for event in events], dtype=float),
+            ))
+            events_used += len(events)
+    return groups, rows_loaded, events_used
 
 
-def make_sequences(
-    x: np.ndarray,
-    y: np.ndarray,
+def choose_sequence_specs(
+    groups: list[tuple[np.ndarray, np.ndarray]],
     sequence_length: int,
     stride: int,
     max_sequences: int,
     seed: int,
     sample_mode: str,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> list[tuple[int, int]]:
     if sequence_length < 2:
         raise SystemExit("--sequence-length precisa ser >= 2.")
     if stride < 1:
         raise SystemExit("--sequence-stride precisa ser >= 1.")
-    count = max(0, (len(y) - sequence_length - 1) // stride + 1)
-    if count <= 0:
-        return np.empty((0, sequence_length, x.shape[1]), dtype=float), np.empty((0,), dtype=float)
-    indices = np.arange(0, count * stride, stride, dtype=int)
-    if max_sequences > 0 and len(indices) > max_sequences:
+    specs: list[tuple[int, int]] = []
+    for group_index, (_x, y) in enumerate(groups):
+        count = max(0, (len(y) - sequence_length) // stride)
+        specs.extend((group_index, start) for start in range(0, count * stride, stride))
+    if max_sequences > 0 and len(specs) > max_sequences:
+        indices = np.arange(len(specs))
         if sample_mode == "random":
             rng = np.random.default_rng(seed)
-            indices = np.sort(rng.choice(indices, size=max_sequences, replace=False))
+            selected = np.sort(rng.choice(indices, size=max_sequences, replace=False))
         else:
-            indices = np.linspace(0, indices[-1], num=max_sequences, dtype=int)
-    seq_x = np.empty((len(indices), sequence_length, x.shape[1]), dtype=np.float32)
-    seq_y = np.empty((len(indices),), dtype=np.float32)
-    for out_index, start in enumerate(indices):
+            selected = np.linspace(0, len(specs) - 1, num=max_sequences, dtype=int)
+        specs = [specs[index] for index in selected]
+    return specs
+
+
+def make_sequences(
+    groups: list[tuple[np.ndarray, np.ndarray]],
+    sequence_length: int,
+    stride: int,
+    max_sequences: int,
+    seed: int,
+    sample_mode: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    feature_count = groups[0][0].shape[1] if groups else len(FEATURES)
+    specs = choose_sequence_specs(groups, sequence_length, stride, max_sequences, seed, sample_mode)
+    if not specs:
+        return (
+            np.empty((0, sequence_length, feature_count), dtype=np.float32),
+            np.empty((0, feature_count), dtype=np.float32),
+            np.empty((0,), dtype=np.float32),
+        )
+    seq_x = np.empty((len(specs), sequence_length, feature_count), dtype=np.float32)
+    current_x = np.empty((len(specs), feature_count), dtype=np.float32)
+    seq_y = np.empty((len(specs),), dtype=np.float32)
+    for out_index, (group_index, start) in enumerate(specs):
+        x, y = groups[group_index]
         end = start + sequence_length
         seq_x[out_index] = x[start:end]
+        current_x[out_index] = x[end]
         seq_y[out_index] = y[end]
-    return seq_x, seq_y
+    return seq_x, current_x, seq_y
 
 
 def chronological_split(
-    x: np.ndarray,
+    history_x: np.ndarray,
+    current_x: np.ndarray,
     y: np.ndarray,
     test_fraction: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if not 0.0 < test_fraction < 1.0:
         raise SystemExit("--test-fraction precisa estar entre 0 e 1.")
     test_size = max(1, int(round(len(y) * test_fraction)))
     split = len(y) - test_size
     if split <= 0:
         raise SystemExit("Poucas sequencias para criar treino/teste.")
-    return x[:split], x[split:], y[:split], y[split:]
+    return history_x[:split], history_x[split:], current_x[:split], current_x[split:], y[:split], y[split:]
 
 
 def random_split(
-    x: np.ndarray,
+    history_x: np.ndarray,
+    current_x: np.ndarray,
     y: np.ndarray,
     test_fraction: float,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if not 0.0 < test_fraction < 1.0:
         raise SystemExit("--test-fraction precisa estar entre 0 e 1.")
     indices = np.arange(len(y))
@@ -202,29 +249,44 @@ def random_split(
     train_idx = indices[test_size:]
     if len(train_idx) == 0:
         raise SystemExit("Poucas sequencias para criar treino/teste.")
-    return x[train_idx], x[test_idx], y[train_idx], y[test_idx]
+    return (
+        history_x[train_idx], history_x[test_idx],
+        current_x[train_idx], current_x[test_idx],
+        y[train_idx], y[test_idx],
+    )
 
 
 def split_sequences(
-    x: np.ndarray,
+    history_x: np.ndarray,
+    current_x: np.ndarray,
     y: np.ndarray,
     test_fraction: float,
     seed: int,
     split_mode: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if split_mode == "random":
-        return random_split(x, y, test_fraction, seed)
-    return chronological_split(x, y, test_fraction)
+        return random_split(history_x, current_x, y, test_fraction, seed)
+    return chronological_split(history_x, current_x, y, test_fraction)
 
 
 def standardize_sequence(
     train_x: np.ndarray,
     test_x: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    mean = train_x.reshape(-1, train_x.shape[-1]).mean(axis=0)
-    scale = train_x.reshape(-1, train_x.shape[-1]).std(axis=0)
+    train_current_x: np.ndarray,
+    test_current_x: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    flat_train = np.vstack([train_x.reshape(-1, train_x.shape[-1]), train_current_x])
+    mean = flat_train.mean(axis=0)
+    scale = flat_train.std(axis=0)
     scale[scale == 0.0] = 1.0
-    return (train_x - mean) / scale, (test_x - mean) / scale, mean, scale
+    return (
+        (train_x - mean) / scale,
+        (test_x - mean) / scale,
+        (train_current_x - mean) / scale,
+        (test_current_x - mean) / scale,
+        mean,
+        scale,
+    )
 
 
 def build_models(keras, sequence_length: int, n_features: int) -> dict[str, object]:
@@ -232,27 +294,26 @@ def build_models(keras, sequence_length: int, n_features: int) -> dict[str, obje
         model.compile(optimizer=keras.optimizers.Adam(learning_rate=1e-3), loss="mse", metrics=["mae"])
         return model
 
+    def hybrid_model(name: str, temporal_layer):
+        history_input = keras.layers.Input(shape=(sequence_length, n_features), name="history")
+        current_input = keras.layers.Input(shape=(n_features,), name="current")
+        temporal = temporal_layer(history_input)
+        current = keras.layers.Dense(64, activation="relu")(current_input)
+        x = keras.layers.Concatenate()([temporal, current])
+        x = keras.layers.Dense(64, activation="relu")(x)
+        x = keras.layers.Dense(32, activation="relu")(x)
+        output = keras.layers.Dense(1)(x)
+        return compile_model(keras.Model([history_input, current_input], output, name=name))
+
+    def temporal_cnn_layer(history_input):
+        x = keras.layers.Conv1D(64, kernel_size=3, padding="causal", activation="relu")(history_input)
+        x = keras.layers.Conv1D(64, kernel_size=3, padding="causal", activation="relu")(x)
+        return keras.layers.GlobalAveragePooling1D()(x)
+
     return {
-        "lstm": compile_model(keras.Sequential([
-            keras.layers.Input(shape=(sequence_length, n_features)),
-            keras.layers.LSTM(64),
-            keras.layers.Dense(32, activation="relu"),
-            keras.layers.Dense(1),
-        ])),
-        "gru": compile_model(keras.Sequential([
-            keras.layers.Input(shape=(sequence_length, n_features)),
-            keras.layers.GRU(64),
-            keras.layers.Dense(32, activation="relu"),
-            keras.layers.Dense(1),
-        ])),
-        "temporal_cnn": compile_model(keras.Sequential([
-            keras.layers.Input(shape=(sequence_length, n_features)),
-            keras.layers.Conv1D(64, kernel_size=3, padding="causal", activation="relu"),
-            keras.layers.Conv1D(64, kernel_size=3, padding="causal", activation="relu"),
-            keras.layers.GlobalAveragePooling1D(),
-            keras.layers.Dense(32, activation="relu"),
-            keras.layers.Dense(1),
-        ])),
+        "lstm": hybrid_model("lstm", keras.layers.LSTM(64)),
+        "gru": hybrid_model("gru", keras.layers.GRU(64)),
+        "temporal_cnn": hybrid_model("temporal_cnn", temporal_cnn_layer),
     }
 
 
@@ -303,10 +364,13 @@ def expected_metadata(args: argparse.Namespace, job: dict[str, str], paths: list
         "label": job["label"],
         "source_files": len(paths),
         "source_paths": [str(path) for path in paths],
+        "sequence_grouping": "source_file",
+        "sequence_order": "submit_time_ns,execution_order,completion_time_ns,row_index",
         "sequence_length": args.sequence_length,
         "sequence_stride": args.sequence_stride,
-        "prediction_horizon": 1,
-        "target_alignment": "next_kernel",
+        "prediction_horizon": 0,
+        "target_alignment": "current_kernel_with_history",
+        "input_context": "previous_sequence_plus_current_features",
         "max_sequences": args.max_sequences,
         "test_fraction": args.test_fraction,
         "split_mode": args.split_mode,
@@ -376,6 +440,16 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
     diagnostics_dir = seq_output_dir / "model_diagnostics"
     seq_output_dir.mkdir(parents=True, exist_ok=True)
     metadata_signature = expected_metadata(args, job, paths)
+    metadata_path = seq_output_dir / "sequence_metadata.json"
+    reusable_model_cache = False
+    if metadata_path.exists():
+        try:
+            reusable_model_cache = metadata_matches(
+                json.loads(metadata_path.read_text(encoding="utf-8")),
+                metadata_signature,
+            )
+        except (OSError, json.JSONDecodeError):
+            reusable_model_cache = False
 
     if not args.no_cache and not args.only_model and not args.force_model:
         cached = existing_sequential_result(job, paths, seq_output_dir, metadata_signature)
@@ -383,10 +457,9 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             print(f"{job['label']} {job['target']}: cached sequential_models={seq_output_dir}")
             return cached
 
-    x, y = load_ordered_matrix(paths, job["target"])
-    seq_x, seq_y = make_sequences(
-        x,
-        y,
+    groups, rows_loaded, events_used = load_grouped_events(paths, job["target"])
+    seq_x, current_x, seq_y = make_sequences(
+        groups,
         args.sequence_length,
         args.sequence_stride,
         args.max_sequences,
@@ -395,23 +468,32 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
     )
     if len(seq_y) == 0:
         raise SystemExit(f"Nenhuma sequencia valida para {job['label']} {job['target']}.")
-    train_x, test_x, train_y, test_y = split_sequences(
+    train_x, test_x, train_current_x, test_current_x, train_y, test_y = split_sequences(
         seq_x,
+        current_x,
         seq_y,
         args.test_fraction,
         args.seed,
         args.split_mode,
     )
-    train_x, test_x, mean, scale = standardize_sequence(train_x, test_x)
+    train_x, test_x, train_current_x, test_current_x, mean, scale = standardize_sequence(
+        train_x,
+        test_x,
+        train_current_x,
+        test_current_x,
+    )
 
     metadata = {
         **metadata_signature,
-        "rows_loaded": int(len(y)),
+        "rows_loaded": int(rows_loaded),
+        "events_used": int(events_used),
+        "groups": int(len(groups)),
+        "sequences": int(len(seq_y)),
         "train_sequences": int(len(train_y)),
         "test_sequences": int(len(test_y)),
         "standardize": {"mean": mean.tolist(), "scale": scale.tolist()},
     }
-    (seq_output_dir / "sequence_metadata.json").write_text(
+    metadata_path.write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -424,13 +506,28 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
         if args.only_model and model_name != args.only_model:
             continue
         model_path = seq_output_dir / f"{model_name}.keras"
-        if model_path.exists() and not args.force_model and not args.no_cache:
-            model = keras.models.load_model(model_path)
-            prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
-            history = None
+        model_inputs = [test_x, test_current_x]
+        if reusable_model_cache and model_path.exists() and not args.force_model and not args.no_cache:
+            try:
+                model = keras.models.load_model(model_path)
+                prediction = model.predict(model_inputs, batch_size=args.batch_size, verbose=0).reshape(-1)
+                history = None
+            except Exception as exc:
+                print(f"{job['label']} {job['target']} {model_name}: cache incompativel, retreinando ({exc})")
+                model = build_models(keras, args.sequence_length, train_x.shape[-1])[model_name]
+                history = model.fit(
+                    [train_x, train_current_x],
+                    train_y,
+                    validation_split=0.1,
+                    epochs=args.epochs,
+                    batch_size=args.batch_size,
+                    verbose=0,
+                    shuffle=False,
+                )
+                prediction = model.predict(model_inputs, batch_size=args.batch_size, verbose=0).reshape(-1)
         else:
             history = model.fit(
-                train_x,
+                [train_x, train_current_x],
                 train_y,
                 validation_split=0.1,
                 epochs=args.epochs,
@@ -438,7 +535,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
                 verbose=0,
                 shuffle=False,
             )
-            prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
+            prediction = model.predict(model_inputs, batch_size=args.batch_size, verbose=0).reshape(-1)
         metric_row = REG.metrics(test_y, prediction)
         REG.plot_prediction_diagnostics(seq_output_dir, model_name, test_y, prediction)
         if history is not None:
@@ -453,8 +550,8 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             "test_sequences": str(len(test_y)),
             "sequence_length": str(args.sequence_length),
             "sequence_stride": str(args.sequence_stride),
-            "prediction_horizon": "1",
-            "target_alignment": "next_kernel",
+            "prediction_horizon": "0",
+            "target_alignment": "current_kernel_with_history",
             "split_mode": args.split_mode,
             "sample_mode": args.sample_mode,
             "diagnostics_dir": str(diagnostics_dir),
@@ -470,7 +567,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
         "label": job["label"],
         "target": job["target"],
         "source_files": str(len(paths)),
-        "rows_loaded": str(len(y)),
+        "rows_loaded": str(rows_loaded),
         "train_sequences": rows[0]["train_sequences"],
         "test_sequences": rows[0]["test_sequences"],
         "best_model": best["model"],
