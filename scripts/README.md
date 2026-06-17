@@ -58,6 +58,12 @@ Rodar so regressores classicos, sem sequenciais:
 PIPELINE_A_SEQUENTIAL=false bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
 
+Rodar so regressores classicos e retreinar tudo, sem cache:
+
+```bash
+PIPELINE_A_SEQUENTIAL=false CLASSICAL_CACHE=false bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
 Rodar so sequenciais:
 
 ```bash
@@ -74,6 +80,12 @@ Rodar novamente apenas um modelo sequencial, ignorando cache:
 
 ```bash
 PIPELINE_A_CLASSICAL=false SEQUENCE_MODEL_ONLY=lstm SEQUENCE_FORCE_MODEL=true bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
+Rodar busca de hiperparametros so da Temporal CNN:
+
+```bash
+PIPELINE_A_CLASSICAL=false SEQUENCE_MODEL_ONLY=temporal_cnn SEQUENCE_FORCE_MODEL=true SEQUENCE_CNN_MAX_TRIALS=8 bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
 
 Os sequenciais usam janelas separadas por arquivo de origem, ordenadas por `submit_time_ns`, `execution_order` e `completion_time_ns`. A entrada do modelo e `historico anterior + features do kernel atual`, e o alvo e o tempo do kernel atual.
@@ -93,7 +105,7 @@ DEPENDENCY_ONLY=true PIPELINE_A_SEQUENTIAL=false bash scripts/rodar_pipeline_a_m
 As partes pesadas usam cache por padrao. Para forcar recalculo:
 
 ```bash
-SEQUENCE_CACHE=false bash scripts/rodar_pipeline_a_machine_learning.sh
+CLASSICAL_CACHE=false SEQUENCE_CACHE=false bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
 
 O ranking da Pipeline A gera tres saidas:

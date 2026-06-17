@@ -83,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--only-model", choices=("lstm", "gru", "temporal_cnn"), default=os.getenv("SEQUENCE_MODEL_ONLY", ""))
     parser.add_argument("--force-model", action="store_true", default=env_flag("SEQUENCE_FORCE_MODEL", False))
     parser.add_argument("--no-cache", action="store_true", help="Recompute even when sequential outputs already exist.")
+    parser.add_argument("--cnn-max-trials", type=int, default=int(os.getenv("SEQUENCE_CNN_MAX_TRIALS", "6")))
     return parser.parse_args()
 
 
@@ -289,32 +290,93 @@ def standardize_sequence(
     )
 
 
+def compile_sequence_model(keras, model, learning_rate: float = 1e-3):
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=learning_rate), loss="mse", metrics=["mae"])
+    return model
+
+
+def build_hybrid_model(
+    keras,
+    sequence_length: int,
+    n_features: int,
+    name: str,
+    temporal_layer,
+    dense_units: int = 64,
+    dropout: float = 0.0,
+    learning_rate: float = 1e-3,
+):
+    history_input = keras.layers.Input(shape=(sequence_length, n_features), name="history")
+    current_input = keras.layers.Input(shape=(n_features,), name="current")
+    temporal = temporal_layer(history_input)
+    current = keras.layers.Dense(dense_units, activation="relu")(current_input)
+    x = keras.layers.Concatenate()([temporal, current])
+    x = keras.layers.Dense(dense_units, activation="relu")(x)
+    if dropout > 0.0:
+        x = keras.layers.Dropout(dropout)(x)
+    x = keras.layers.Dense(max(16, dense_units // 2), activation="relu")(x)
+    output = keras.layers.Dense(1)(x)
+    return compile_sequence_model(
+        keras,
+        keras.Model([history_input, current_input], output, name=name),
+        learning_rate,
+    )
+
+
 def build_models(keras, sequence_length: int, n_features: int) -> dict[str, object]:
-    def compile_model(model):
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=1e-3), loss="mse", metrics=["mae"])
-        return model
-
     def hybrid_model(name: str, temporal_layer):
-        history_input = keras.layers.Input(shape=(sequence_length, n_features), name="history")
-        current_input = keras.layers.Input(shape=(n_features,), name="current")
-        temporal = temporal_layer(history_input)
-        current = keras.layers.Dense(64, activation="relu")(current_input)
-        x = keras.layers.Concatenate()([temporal, current])
-        x = keras.layers.Dense(64, activation="relu")(x)
-        x = keras.layers.Dense(32, activation="relu")(x)
-        output = keras.layers.Dense(1)(x)
-        return compile_model(keras.Model([history_input, current_input], output, name=name))
-
-    def temporal_cnn_layer(history_input):
-        x = keras.layers.Conv1D(64, kernel_size=3, padding="causal", activation="relu")(history_input)
-        x = keras.layers.Conv1D(64, kernel_size=3, padding="causal", activation="relu")(x)
-        return keras.layers.GlobalAveragePooling1D()(x)
+        return build_hybrid_model(keras, sequence_length, n_features, name, temporal_layer)
 
     return {
         "lstm": hybrid_model("lstm", keras.layers.LSTM(64)),
         "gru": hybrid_model("gru", keras.layers.GRU(64)),
-        "temporal_cnn": hybrid_model("temporal_cnn", temporal_cnn_layer),
+        "temporal_cnn": build_temporal_cnn_model(keras, sequence_length, n_features, {}),
     }
+
+
+def cnn_trial_configs(max_trials: int) -> list[dict[str, float | int]]:
+    configs: list[dict[str, float | int]] = [
+        {"filters": 64, "kernel_size": 3, "dense_units": 64, "dropout": 0.0, "learning_rate": 1e-3},
+        {"filters": 64, "kernel_size": 5, "dense_units": 64, "dropout": 0.1, "learning_rate": 1e-3},
+        {"filters": 128, "kernel_size": 3, "dense_units": 64, "dropout": 0.1, "learning_rate": 1e-3},
+        {"filters": 128, "kernel_size": 5, "dense_units": 128, "dropout": 0.2, "learning_rate": 5e-4},
+        {"filters": 64, "kernel_size": 7, "dense_units": 128, "dropout": 0.2, "learning_rate": 5e-4},
+        {"filters": 128, "kernel_size": 7, "dense_units": 128, "dropout": 0.3, "learning_rate": 3e-4},
+        {"filters": 256, "kernel_size": 3, "dense_units": 128, "dropout": 0.2, "learning_rate": 3e-4},
+        {"filters": 256, "kernel_size": 5, "dense_units": 256, "dropout": 0.3, "learning_rate": 2e-4},
+    ]
+    return configs[:max(1, max_trials)]
+
+
+def cnn_config_name(config: dict[str, float | int]) -> str:
+    dropout = int(float(config["dropout"]) * 100)
+    lr = str(config["learning_rate"]).replace(".", "p").replace("-", "m")
+    return f"f{config['filters']}_k{config['kernel_size']}_d{config['dense_units']}_do{dropout}_lr{lr}"
+
+
+def build_temporal_cnn_model(keras, sequence_length: int, n_features: int, config: dict[str, float | int]):
+    filters = int(config.get("filters", 64))
+    kernel_size = int(config.get("kernel_size", 3))
+    dense_units = int(config.get("dense_units", 64))
+    dropout = float(config.get("dropout", 0.0))
+    learning_rate = float(config.get("learning_rate", 1e-3))
+
+    def temporal_cnn_layer(history_input):
+        x = keras.layers.Conv1D(filters, kernel_size=kernel_size, padding="causal", activation="relu")(history_input)
+        x = keras.layers.Conv1D(filters, kernel_size=kernel_size, padding="causal", activation="relu")(x)
+        if dropout > 0.0:
+            x = keras.layers.Dropout(dropout)(x)
+        return keras.layers.GlobalAveragePooling1D()(x)
+
+    return build_hybrid_model(
+        keras,
+        sequence_length,
+        n_features,
+        "temporal_cnn",
+        temporal_cnn_layer,
+        dense_units=dense_units,
+        dropout=dropout,
+        learning_rate=learning_rate,
+    )
 
 
 def plot_loss(output_dir: Path, model_name: str, history) -> Path:
@@ -338,12 +400,26 @@ def write_metrics(path: Path, rows: list[dict[str, str]]) -> None:
     fieldnames = [
         "model", "MAE", "RMSE", "R2", "train_sequences", "test_sequences",
         "sequence_length", "sequence_stride", "prediction_horizon", "target_alignment",
-        "split_mode", "sample_mode", "diagnostics_dir",
+        "split_mode", "sample_mode", "diagnostics_dir", "cnn_best_config",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def write_cnn_trials(path: Path, rows: list[dict[str, str]]) -> None:
+    fieldnames = [
+        "trial", "config_name", "filters", "kernel_size", "dense_units", "dropout", "learning_rate",
+        "MAE", "RMSE", "R2", "model_path",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
 def plot_sequential_metric_comparisons(output_dir: Path, rows: list[dict[str, str]]) -> list[Path]:
@@ -502,7 +578,21 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
     residual_metrics_path = diagnostics_dir / "residual_distribution_metrics.csv"
     if residual_metrics_path.exists():
         residual_metrics_path.unlink()
-    for model_name, model in build_models(keras, args.sequence_length, train_x.shape[-1]).items():
+
+    def fit_predict(model, model_name: str):
+        history = model.fit(
+            [train_x, train_current_x],
+            train_y,
+            validation_split=0.1,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            verbose=0,
+            shuffle=False,
+        )
+        prediction = model.predict([test_x, test_current_x], batch_size=args.batch_size, verbose=0).reshape(-1)
+        return history, prediction
+
+    for model_name in ("lstm", "gru", "temporal_cnn"):
         if args.only_model and model_name != args.only_model:
             continue
         model_path = seq_output_dir / f"{model_name}.keras"
@@ -514,28 +604,56 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
                 history = None
             except Exception as exc:
                 print(f"{job['label']} {job['target']} {model_name}: cache incompativel, retreinando ({exc})")
-                model = build_models(keras, args.sequence_length, train_x.shape[-1])[model_name]
-                history = model.fit(
-                    [train_x, train_current_x],
-                    train_y,
-                    validation_split=0.1,
-                    epochs=args.epochs,
-                    batch_size=args.batch_size,
-                    verbose=0,
-                    shuffle=False,
-                )
-                prediction = model.predict(model_inputs, batch_size=args.batch_size, verbose=0).reshape(-1)
+                model = None
+                prediction = None
+                history = None
         else:
-            history = model.fit(
-                [train_x, train_current_x],
-                train_y,
-                validation_split=0.1,
-                epochs=args.epochs,
-                batch_size=args.batch_size,
-                verbose=0,
-                shuffle=False,
-            )
-            prediction = model.predict(model_inputs, batch_size=args.batch_size, verbose=0).reshape(-1)
+            model = None
+            prediction = None
+            history = None
+
+        cnn_best_config = ""
+        if prediction is None:
+            if model_name == "temporal_cnn":
+                trial_rows: list[dict[str, str]] = []
+                trial_dir = seq_output_dir / "temporal_cnn_trials"
+                trial_dir.mkdir(parents=True, exist_ok=True)
+                best_trial: tuple[float, object, object, np.ndarray, dict[str, float | int], dict[str, float]] | None = None
+                for trial_index, config in enumerate(cnn_trial_configs(args.cnn_max_trials), start=1):
+                    config_name = cnn_config_name(config)
+                    trial_name = f"temporal_cnn_{config_name}"
+                    keras.utils.set_random_seed(args.seed + trial_index)
+                    trial_model = build_temporal_cnn_model(keras, args.sequence_length, train_x.shape[-1], config)
+                    trial_history, trial_prediction = fit_predict(trial_model, trial_name)
+                    trial_metric = REG.metrics(test_y, trial_prediction)
+                    trial_model_path = trial_dir / f"{trial_name}.keras"
+                    trial_model.save(trial_model_path)
+                    REG.plot_prediction_diagnostics(seq_output_dir, trial_name, test_y, trial_prediction)
+                    plot_loss(seq_output_dir, trial_name, trial_history)
+                    trial_rows.append({
+                        "trial": str(trial_index),
+                        "config_name": config_name,
+                        "filters": str(config["filters"]),
+                        "kernel_size": str(config["kernel_size"]),
+                        "dense_units": str(config["dense_units"]),
+                        "dropout": str(config["dropout"]),
+                        "learning_rate": str(config["learning_rate"]),
+                        "MAE": f"{trial_metric['MAE']:.6f}",
+                        "RMSE": f"{trial_metric['RMSE']:.6f}",
+                        "R2": f"{trial_metric['R2']:.6f}",
+                        "model_path": str(trial_model_path),
+                    })
+                    if best_trial is None or trial_metric["RMSE"] < best_trial[0]:
+                        best_trial = (float(trial_metric["RMSE"]), trial_model, trial_history, trial_prediction, config, trial_metric)
+                write_cnn_trials(seq_output_dir / "temporal_cnn_trials.csv", trial_rows)
+                if best_trial is None:
+                    raise SystemExit("Nenhum trial da Temporal CNN foi treinado.")
+                _rmse, model, history, prediction, best_config, _metric = best_trial
+                cnn_best_config = json.dumps(best_config, sort_keys=True)
+            else:
+                model = build_models(keras, args.sequence_length, train_x.shape[-1])[model_name]
+                history, prediction = fit_predict(model, model_name)
+
         metric_row = REG.metrics(test_y, prediction)
         REG.plot_prediction_diagnostics(seq_output_dir, model_name, test_y, prediction)
         if history is not None:
@@ -555,6 +673,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
             "split_mode": args.split_mode,
             "sample_mode": args.sample_mode,
             "diagnostics_dir": str(diagnostics_dir),
+            "cnn_best_config": cnn_best_config,
         })
 
     if not rows:
