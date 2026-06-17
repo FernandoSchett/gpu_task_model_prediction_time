@@ -64,6 +64,12 @@ Rodar so regressores classicos e retreinar tudo, sem cache:
 PIPELINE_A_SEQUENTIAL=false CLASSICAL_CACHE=false bash scripts/rodar_pipeline_a_machine_learning.sh
 ```
 
+Rodar classicos com varios recortes em paralelo:
+
+```bash
+PIPELINE_A_SEQUENTIAL=false CLASSICAL_CACHE=false CLASSICAL_PARALLEL_JOBS=2 MODEL_N_JOBS=4 bash scripts/rodar_pipeline_a_machine_learning.sh
+```
+
 Rodar so sequenciais:
 
 ```bash
@@ -137,6 +143,12 @@ Forcar recalculo:
 EVT_CACHE=false bash scripts/rodar_pipeline_b_extremos.sh
 ```
 
+Rodar Pipeline B com varios recortes em paralelo:
+
+```bash
+EVT_CACHE=false EVT_PARALLEL_JOBS=4 bash scripts/rodar_pipeline_b_extremos.sh
+```
+
 Rodar novamente apenas um ajuste da Pipeline B:
 
 ```bash
@@ -174,6 +186,8 @@ CNN2D_MAX_SAMPLES=0
 CNN2D_MAX_ARCHITECTURES=8
 CNN2D_EPOCHS=8
 CNN2D_CACHE=true
+CNN2D_PREPROCESS_PARALLEL_JOBS=1
+CNN2D_TRAIN_PARALLEL_JOBS=1
 CNN2D_MODEL_ONLY=
 CNN2D_FORCE_MODEL=false
 CNN2D_PLOTS_ONLY=false
@@ -186,6 +200,20 @@ Forcar recalculo:
 ```bash
 CNN2D_CACHE=false bash scripts/rodar_pipeline_c_cnn2d.sh
 ```
+
+Rodar preprocess 2D com varios recortes em paralelo:
+
+```bash
+CNN2D_CACHE=false CNN2D_PREPROCESS_PARALLEL_JOBS=2 bash scripts/rodar_pipeline_c_cnn2d.sh
+```
+
+Rodar treino 2D com varios datasets em paralelo:
+
+```bash
+CNN2D_TRAIN_PARALLEL_JOBS=2 bash scripts/rodar_pipeline_c_cnn2d.sh
+```
+
+Com GPU, cuidado: `CNN2D_TRAIN_PARALLEL_JOBS>1` pode disputar VRAM.
 
 Rodar novamente apenas uma arquitetura CNN 2D, ignorando cache:
 

@@ -19,6 +19,7 @@ import os
 import pickle
 import random
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from statistics import NormalDist
 from typing import Iterable
@@ -141,6 +142,7 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--only-model", default=os.getenv("CLASSICAL_MODEL_ONLY", ""), help="Train only one classical model by internal name.")
     compare_parser.add_argument("--force-model", action="store_true", default=os.getenv("CLASSICAL_FORCE_MODEL", "").lower() in {"1", "true", "yes", "on", "sim"}, help="Retrain --only-model even when cached model exists.")
     compare_parser.add_argument("--no-cache", action="store_true", default=os.getenv("CLASSICAL_CACHE", "").lower() in {"0", "false", "no", "off", "nao"}, help="Retrain classical models instead of loading cached models.")
+    compare_parser.add_argument("--parallel-jobs", type=int, default=int(os.getenv("CLASSICAL_PARALLEL_JOBS", "1")), help="Number of analysis recortes to run in parallel.")
     
     baseline_parser = subparsers.add_parser("baseline", help="Train linear/ridge/quadratic regression models")
     baseline_parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Directory containing experiment result CSVs.")
@@ -1633,33 +1635,44 @@ def dependency_output_dir(analysis_dir: Path, job: dict[str, str]) -> Path:
     return analysis_root / "analise_dependencia" / analysis_dir.name / job["label"] / job["target"]
 
 
+def run_one_compare_job(args: argparse.Namespace, job: dict[str, str]) -> tuple[dict[str, str], str]:
+    paths = result_paths(args.results_dir, args.first_sweep, job["include_regex"])
+    if args.dependency_only:
+        result = dependency_only_result(
+            paths,
+            job["target"],
+            dependency_output_dir(args.analysis_dir, job),
+            use_cache=not args.no_dependency_cache,
+        )
+    else:
+        result = train_and_plot(
+            paths, job["target"], Path(job["output_dir"]) / "nao_sequenciais", args.test_fraction,
+            args.seed, args.knn_k, args.knn_train_limit, args.cv_folds,
+            args.only_model, args.force_model, args.no_cache,
+        )
+    row = {"label": job["label"], "target": job["target"], **result}
+    if args.dependency_only:
+        cached = " cached" if result.get("dependency_cached") == "true" else ""
+        message = f"{job['label']} {job['target']}:{cached} files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} dependency_metrics={result['dependency_metrics_csv']}"
+    else:
+        message = f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f} models_dir={result['models_dir']}"
+    return row, message
+
+
 def run_compare_jobs(args: argparse.Namespace, jobs_file: Path) -> int:
     if args.analysis_dir is None:
         raise SystemExit("--analysis-dir e obrigatorio quando --jobs-file e usado.")
     jobs = load_jobs(jobs_file)
     rows: list[dict[str, str]] = []
-    for job in jobs:
-        paths = result_paths(args.results_dir, args.first_sweep, job["include_regex"])
-        if args.dependency_only:
-            result = dependency_only_result(
-                paths,
-                job["target"],
-                dependency_output_dir(args.analysis_dir, job),
-                use_cache=not args.no_dependency_cache,
-            )
-        else:
-            result = train_and_plot(
-                paths, job["target"], Path(job["output_dir"]) / "nao_sequenciais", args.test_fraction,
-                args.seed, args.knn_k, args.knn_train_limit, args.cv_folds,
-                args.only_model, args.force_model, args.no_cache,
-            )
-        row = {"label": job["label"], "target": job["target"], **result}
+    parallel_jobs = max(1, int(args.parallel_jobs))
+    if parallel_jobs == 1 or len(jobs) <= 1:
+        results = [run_one_compare_job(args, job) for job in jobs]
+    else:
+        with ProcessPoolExecutor(max_workers=parallel_jobs) as executor:
+            results = list(executor.map(run_one_compare_job, [args] * len(jobs), jobs))
+    for row, message in results:
         rows.append(row)
-        if args.dependency_only:
-            cached = " cached" if result.get("dependency_cached") == "true" else ""
-            print(f"{job['label']} {job['target']}:{cached} files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} dependency_metrics={result['dependency_metrics_csv']}")
-        else:
-            print(f"{job['label']} {job['target']}: files={result['source_files']} rows={result['rows_loaded']} used={result['rows_used']} best={result['best_model']} rmse={float(result['best_rmse']):.3f} r2={float(result['best_r2']):.3f} models_dir={result['models_dir']}")
+        print(message)
 
     if args.dependency_only:
         summary_path = analysis_root_from_condition_dir(args.analysis_dir) / "analise_dependencia" / args.analysis_dir.name / "dependency_summary.csv"

@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=int(os.getenv("SEED", "42") or "42"))
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--parallel-jobs", type=int, default=int(os.getenv("CNN2D_PREPROCESS_PARALLEL_JOBS", "1")))
     return parser.parse_args()
 
 
@@ -284,9 +286,15 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    jobs = load_jobs(args.jobs_file)
+    parallel_jobs = max(1, int(args.parallel_jobs))
+    if parallel_jobs == 1 or len(jobs) <= 1:
+        results = [run_job(args, job) for job in jobs]
+    else:
+        with ProcessPoolExecutor(max_workers=parallel_jobs) as executor:
+            results = list(executor.map(run_job, [args] * len(jobs), jobs))
     rows = []
-    for job in load_jobs(args.jobs_file):
-        row = run_job(args, job)
+    for row in results:
         rows.append(row)
         cached = " cached" if row["cached"] == "true" else ""
         print(

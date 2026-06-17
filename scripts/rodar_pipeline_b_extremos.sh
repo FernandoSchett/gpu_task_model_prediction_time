@@ -21,6 +21,7 @@ PRESERVED_ENV_VARS=(
   EVT_CACHE
   EVT_MODEL_ONLY
   EVT_FORCE_MODEL
+  EVT_PARALLEL_JOBS
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   if [[ -v "${var_name}" ]]; then
@@ -64,6 +65,7 @@ EVT_RETURN_QUANTILES="${EVT_RETURN_QUANTILES:-0.95 0.99 0.999}"
 EVT_CACHE="${EVT_CACHE:-true}"
 EVT_MODEL_ONLY="${EVT_MODEL_ONLY:-}"
 EVT_FORCE_MODEL="${EVT_FORCE_MODEL:-false}"
+EVT_PARALLEL_JOBS="${EVT_PARALLEL_JOBS:-1}"
 EVT_CACHE_ARGS=()
 if [[ "${EVT_CACHE}" == "false" ]] || [[ "${EVT_CACHE}" == "0" ]]; then
   EVT_CACHE_ARGS+=(--no-cache)
@@ -123,6 +125,7 @@ run_one() {
     --threshold-quantile "${EVT_THRESHOLD_QUANTILE}" \
     --decluster-run-length "${EVT_DECLUSTER_RUN_LENGTH}" \
     --return-quantiles ${EVT_RETURN_QUANTILES} \
+    --parallel-jobs "${EVT_PARALLEL_JOBS}" \
     "${EVT_MODEL_ARGS[@]}" \
     "${EVT_CACHE_ARGS[@]}"
 }

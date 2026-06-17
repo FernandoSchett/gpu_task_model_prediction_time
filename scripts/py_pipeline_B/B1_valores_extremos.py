@@ -9,6 +9,7 @@ import importlib.util
 import json
 import math
 import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import matplotlib
@@ -46,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-cache", action="store_true", help="Recompute even when EVT outputs already exist.")
     parser.add_argument("--only-model", choices=("gev", "gpd", "gumbel"), default=os.getenv("EVT_MODEL_ONLY", ""))
     parser.add_argument("--force-model", action="store_true", default=os.getenv("EVT_FORCE_MODEL", "").lower() in {"1", "true", "yes", "on", "sim"})
+    parser.add_argument("--parallel-jobs", type=int, default=int(os.getenv("EVT_PARALLEL_JOBS", "1")), help="Number of EVT recortes to run in parallel.")
     return parser.parse_args()
 
 
@@ -437,10 +439,20 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
     }
 
 
+def fit_evt_worker(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
+    return fit_evt_for_job(args, job, import_scipy_stats())
+
+
 def main() -> int:
     args = parse_args()
-    stats = import_scipy_stats()
-    rows = [fit_evt_for_job(args, job, stats) for job in load_jobs(args.jobs_file)]
+    jobs = load_jobs(args.jobs_file)
+    parallel_jobs = max(1, int(args.parallel_jobs))
+    if parallel_jobs == 1 or len(jobs) <= 1:
+        stats = import_scipy_stats()
+        rows = [fit_evt_for_job(args, job, stats) for job in jobs]
+    else:
+        with ProcessPoolExecutor(max_workers=parallel_jobs) as executor:
+            rows = list(executor.map(fit_evt_worker, [args] * len(jobs), jobs))
     summary_path = args.analysis_dir / "extreme_value_summary.csv"
     write_csv(
         summary_path,

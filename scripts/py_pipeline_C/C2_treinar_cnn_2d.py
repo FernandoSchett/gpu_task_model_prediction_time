@@ -8,6 +8,7 @@ import csv
 import json
 import math
 import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import matplotlib
@@ -38,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-model", action="store_true", default=env_flag("CNN2D_FORCE_MODEL", False), help="Retrain selected architecture even when cached model exists.")
     parser.add_argument("--plots-only", action="store_true", default=env_flag("CNN2D_PLOTS_ONLY", False), help="Regenerate prediction/error plots from cached 2D models without training.")
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--parallel-jobs", type=int, default=int(os.getenv("CNN2D_TRAIN_PARALLEL_JOBS", "1")))
     return parser.parse_args()
 
 
@@ -436,13 +438,26 @@ def write_metrics(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
-def main() -> int:
-    args = parse_args()
+def run_dataset_worker(args: argparse.Namespace, row: dict[str, str]) -> list[dict[str, str]]:
     tf, keras = import_tensorflow(args.tf_device, args.require_gpu)
     tf.keras.utils.set_random_seed(args.seed)
+    return run_dataset(args, row, keras)
+
+
+def main() -> int:
+    args = parse_args()
+    rows = load_rows(args.preprocess_summary)
+    parallel_jobs = max(1, int(args.parallel_jobs))
     all_rows: list[dict[str, str]] = []
-    for row in load_rows(args.preprocess_summary):
-        all_rows.extend(run_dataset(args, row, keras))
+    if parallel_jobs == 1 or len(rows) <= 1:
+        tf, keras = import_tensorflow(args.tf_device, args.require_gpu)
+        tf.keras.utils.set_random_seed(args.seed)
+        for row in rows:
+            all_rows.extend(run_dataset(args, row, keras))
+    else:
+        with ProcessPoolExecutor(max_workers=parallel_jobs) as executor:
+            for result_rows in executor.map(run_dataset_worker, [args] * len(rows), rows):
+                all_rows.extend(result_rows)
     summary_path = args.analysis_dir / "pipeline_c_cnn2d_training_summary.csv"
     write_metrics(summary_path, all_rows)
     print(f"pipeline_c_cnn2d_training_summary: {summary_path}")
