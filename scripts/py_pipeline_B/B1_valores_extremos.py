@@ -273,14 +273,14 @@ def existing_evt_result(
 
 def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dict[str, str]:
     paths = REG.result_paths(args.results_dir, args.first_sweep, job["include_regex"])
-    output_dir = Path(job["output_dir"]) / "extreme_value"
+    output_dir = Path(job["output_dir"]) / "extreme_values"
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_signature = expected_metadata(args, job, paths)
 
     if not args.no_cache and not args.only_model and not args.force_model:
         cached = existing_evt_result(job, paths, output_dir, metadata_signature)
         if cached is not None:
-            print(f"{job['label']} {job['target']}: cached extreme_value={output_dir}")
+            print(f"{job['label']} {job['target']}: cached extreme_values={output_dir}")
             return cached
 
     values = load_target_series(paths, job["target"])

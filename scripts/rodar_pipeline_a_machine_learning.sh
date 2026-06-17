@@ -17,6 +17,7 @@ PRESERVED_ENV_VARS=(
   MODEL_N_JOBS
   CLASSICAL_MODEL_ONLY
   CLASSICAL_FORCE_MODEL
+  CLASSICAL_CACHE
   DEPENDENCY_ONLY
   DEPENDENCY_CACHE
   PIPELINE_A_CLASSICAL
@@ -69,6 +70,7 @@ MODEL_N_JOBS="${MODEL_N_JOBS:--1}"
 export MODEL_N_JOBS
 CLASSICAL_MODEL_ONLY="${CLASSICAL_MODEL_ONLY:-}"
 CLASSICAL_FORCE_MODEL="${CLASSICAL_FORCE_MODEL:-false}"
+CLASSICAL_CACHE="${CLASSICAL_CACHE:-true}"
 DEPENDENCY_ONLY="${DEPENDENCY_ONLY:-false}"
 DEPENDENCY_CACHE="${DEPENDENCY_CACHE:-true}"
 PIPELINE_A_CLASSICAL="${PIPELINE_A_CLASSICAL:-true}"
@@ -127,6 +129,9 @@ fi
 if [[ "${CLASSICAL_FORCE_MODEL}" == "true" ]] || [[ "${CLASSICAL_FORCE_MODEL}" == "1" ]]; then
   CLASSICAL_COMPARE_ARGS+=(--force-model)
 fi
+if [[ "${CLASSICAL_CACHE}" == "false" ]] || [[ "${CLASSICAL_CACHE}" == "0" ]]; then
+  CLASSICAL_COMPARE_ARGS+=(--no-cache)
+fi
 if [[ "${DEPENDENCY_ONLY}" == "true" ]] || [[ "${DEPENDENCY_ONLY}" == "1" ]]; then
   CLASSICAL_COMPARE_ARGS+=(--dependency-only)
 fi
@@ -156,7 +161,7 @@ fi
 run_one() {
   local label="$1"
   local results_dirs="$2"
-  local analysis_dir="${ANALYSIS_ROOT}/${label}_sweep_moderado_sem_estimativas_agrupado"
+  local analysis_dir="${ANALYSIS_ROOT}/pipeline_A/${label}"
 
   if [[ -z "${results_dirs}" ]]; then
     echo "Pastas do sweep ${label} nao encontradas." >&2
@@ -180,11 +185,11 @@ run_one() {
       "${CLASSICAL_COMPARE_ARGS[@]}"
 
     if [[ -f "scripts/py_outros/comparar_modelos_pipelines.py" ]]; then
-      "${PYTHON_BIN}" scripts/py_outros/comparar_modelos_pipelines.py --analysis-root "$(dirname "${analysis_dir}")"
+      "${PYTHON_BIN}" scripts/py_outros/comparar_modelos_pipelines.py --analysis-root "${ANALYSIS_ROOT}"
     fi
 
     if [[ ("${DEPENDENCY_ONLY}" == "true" || "${DEPENDENCY_ONLY}" == "1") && -f "scripts/py_pipeline_A/A4_rankings_dependencia.py" ]]; then
-      "${PYTHON_BIN}" scripts/py_pipeline_A/A4_rankings_dependencia.py --analysis-root "$(dirname "${analysis_dir}")"
+      "${PYTHON_BIN}" scripts/py_pipeline_A/A4_rankings_dependencia.py --analysis-root "${ANALYSIS_ROOT}"
     fi
   fi
 

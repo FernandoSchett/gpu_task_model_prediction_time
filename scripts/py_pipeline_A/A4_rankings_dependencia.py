@@ -45,7 +45,8 @@ def finite_float(value: str) -> float:
 
 def load_rows(analysis_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for summary_path in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/dependency_summary.csv")):
+    dependency_root = analysis_root / "analise_dependencia"
+    for summary_path in sorted(dependency_root.glob("*/dependency_summary.csv")):
         condition = condition_from_dir(summary_path.parent)
         with summary_path.open("r", encoding="utf-8", newline="") as file:
             for row in csv.DictReader(file):
@@ -55,7 +56,7 @@ def load_rows(analysis_root: Path) -> list[dict[str, str]]:
     if rows:
         return rows
 
-    for metrics_path in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/*/*/dependency_metrics.csv")):
+    for metrics_path in sorted(dependency_root.glob("*/*/*/dependency_metrics.csv")):
         condition = condition_from_dir(metrics_path.parents[2])
         label = metrics_path.parents[1].name
         target = metrics_path.parent.name
@@ -197,12 +198,14 @@ def plot_overview(output_dir: Path, rows: list[dict[str, str]]) -> None:
 
 def main() -> int:
     args = parse_args()
+    output_dir = args.analysis_root / "analise_dependencia"
+    output_dir.mkdir(parents=True, exist_ok=True)
     rows = load_rows(args.analysis_root)
-    write_rankings_csv(args.analysis_root / "dependency_rankings.csv", rows)
-    plot_rankings(args.analysis_root, rows, args.top_n)
-    plot_overview(args.analysis_root, rows)
-    print(f"dependency_rankings_csv: {args.analysis_root / 'dependency_rankings.csv'}")
-    print(f"plots_dir: {args.analysis_root}")
+    write_rankings_csv(output_dir / "dependency_rankings.csv", rows)
+    plot_rankings(output_dir, rows, args.top_n)
+    plot_overview(output_dir, rows)
+    print(f"dependency_rankings_csv: {output_dir / 'dependency_rankings.csv'}")
+    print(f"plots_dir: {output_dir}")
     return 0
 
 

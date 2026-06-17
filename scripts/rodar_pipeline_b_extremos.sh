@@ -98,7 +98,7 @@ fi
 run_one() {
   local label="$1"
   local results_dirs="$2"
-  local analysis_dir="${ANALYSIS_ROOT}/${label}_sweep_moderado_sem_estimativas_agrupado"
+  local analysis_dir="${ANALYSIS_ROOT}/pipeline_B/${label}"
 
   if [[ -z "${results_dirs}" ]]; then
     echo "Pastas do sweep ${label} nao encontradas." >&2

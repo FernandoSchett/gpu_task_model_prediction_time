@@ -1,279 +1,459 @@
-# 📂 Guia de Estrutura de Dados
+# Guia de Estrutura das Analises
 
-## Hierarquia de Diretórios
+Este documento descreve a estrutura desejada para `resultados/analises_regressao/`.
+Ainda e uma proposta de reorganizacao. O codigo sera ajustado depois do aval.
 
-```
-tstr_cuda/
-├── docs/                              # 📚 Documentação
-│   ├── DATA_DICTIONARY.md             # ← Você está aqui
-│   ├── data_dictionary.csv            # Versão tabular
-│   └── STRUCTURE_GUIDE.md             # Este arquivo
-│
-├── resultados/                        # 📊 Dados de Experimentos
-│   ├── sweep_moderado_sem_estimativas_20260527_104037/
-│   │   └── resultados_experimentos_*.csv   # ← Dados brutos
-│   └── analises_regressao/            # 🔬 Análises treinadas
-│       └── sweep_moderado_sem_estimativas_20260527_104037/
-│           └── geral/
-│               ├── response_time_us/
-│               │   ├── trained_models/          # 🤖 Modelos salvos
-│               │   │   ├── linear_regression.pkl
-│               │   │   ├── ridge_regression.pkl
-│               │   │   ├── random_forest.pkl
-│               │   │   ├── lightgbm.pkl
-│               │   │   ├── xgboost.pkl
-│               │   │   ├── catboost.pkl
-│               │   │   └── models_info.txt
-│               │   ├── regression_metrics.csv  # 📈 Métricas
-│               │   ├── mae_comparison.png
-│               │   ├── rmse_comparison.png
-│               │   └── r2_comparison.png
-│               ├── queueing_delay_us/          # Outro target
-│               └── slowdown/                    # Outro target
-│
-├── scripts/                           # 🐍 Python Scripts
-│   ├── py_pipeline_A/
-│   │   ├── A1_gerar_manifesto_analise.py
-│   │   ├── A2_regressores_classicos.py
-│   │   ├── A3_rankings_regressores.py
-│   │   ├── A4_rankings_dependencia.py
-│   │   ├── A5_modelos_sequenciais.py
-│   │   └── A7_usar_modelos_treinados.py
-│   ├── py_pipeline_B/
-│   │   └── B1_valores_extremos.py
-│   ├── py_outros/
-│   │   ├── A0_analisar_slowdown.py
-│   │   └── A6_gerar_gantt_csv.py
-│   ├── rodar_pipeline_a_machine_learning.sh
-│   ├── rodar_pipeline_b_extremos.sh
-│   └── rodar_todas_pipelines.sh
-│
-└── libs/                              # C++ Implementation
-    ├── include/                       # Headers
-    └── src/                           # Implementation
+## Objetivo
+
+A pasta `analises_regressao/` deve separar claramente:
+
+- resultados da Pipeline A;
+- resultados da Pipeline B;
+- resultados da Pipeline C;
+- comparacoes globais entre pipelines.
+
+Estrutura desejada:
+
+```text
+resultados/
+  analises_regressao/
+    pipeline_A/
+    pipeline_B/
+    pipeline_C/
+    comparacoes_pipelines/
+    analise_dependencia/
 ```
 
----
+## Raiz: `analises_regressao/`
 
-## 📊 Fluxo de Dados
-
-```
-┌─────────────────────────────────────────────┐
-│ GPU Benchmark Experiments (CUDA)            │
-│ (C++ Application)                           │
-└────────────────┬────────────────────────────┘
-                 │
-                 ├─→ Generates: resultados_experimentos_*.csv
-                 │   (Raw experimental data with 54 fields)
-                 │
-                 ▼
-┌─────────────────────────────────────────────┐
-│ A0_analisar_slowdown.py                     │
-│ Exploratory Data Analysis                   │
-│ - Calculate slowdown statistics             │
-│ - Identify outliers                         │
-│ - Summary by configuration                  │
-└────────────────┬────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────┐
-│ A1_gerar_manifesto_analise.py               │
-│ Data Preparation                            │
-│ - Scan sweep directories                    │
-│ - Extract GPU targets from filenames        │
-│ - Create analysis job manifest              │
-│ Output: analysis_jobs.csv                   │
-└────────────────┬────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────┐
-│ A2_regressores_classicos.py (compare mode)  │
-│ Pipeline A: classical ML                    │
-│                                             │
-│ Train classical regression models:          │
-│ - Linear/Ridge/Poly Ridge (baselines)       │
-│ - Random Forest, Gradient Boosting          │
-│ - LightGBM, XGBoost, CatBoost              │
-│ - LightGBM/XGBoost Quantiles               │
-│ - kNN                                       │
-│                                             │
-│ Outputs:                                    │
-│ - regression_metrics.csv                    │
-│ - *.png (comparison plots)                  │
-│ - trained_models/ folder                    │
-│   - *.pkl files (sklearn models)            │
-│   - models_info.txt (metadata)              │
-└────────────────┬────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────┐
-│ A7_usar_modelos_treinados.py               │
-│ Model Inference                             │
-│ - Load saved models                         │
-│ - Make predictions on new data              │
-│ - Generate predictions CSV                  │
-└─────────────────────────────────────────────┘
+```text
+resultados/analises_regressao/
+  pipeline_A/
+  pipeline_B/
+  pipeline_C/
+  comparacoes_pipelines/
+  analise_dependencia/
 ```
 
----
+Conteudo:
 
-## 🔄 Ciclo de Análise
+- `pipeline_A/`: regressores classicos + modelos sequenciais.
+- `pipeline_B/`: modelos de valores extremos, GEV/Gumbel/GPD.
+- `pipeline_C/`: modelos CNN 2D.
+- `comparacoes_pipelines/`: comparacoes entre Pipeline A e Pipeline C.
+- `analise_dependencia/`: metricas e rankings de dependencia dos dados.
 
-### 1️⃣ Preparação (Setup)
-```bash
-# Install dependencies
-pip install -r requirements.txt
+## Pipeline A
 
-### 2️⃣ Coleta de Dados
-```bash
-# Run GPU benchmark experiments (C++)
-# Gera: resultados_experimentos_*.csv em resultados/sweep_*/
+Pipeline A concentra modelos de Machine Learning:
+
+- regressores classicos;
+- modelos sequenciais;
+- comparacao local entre classicos e sequenciais.
+
+Estrutura:
+
+```text
+resultados/analises_regressao/pipeline_A/
+  sem_telemetria/
+  com_telemetria/
+  rankings/
 ```
 
-### 3️⃣ Exploração (EDA)
-```bash
-# Analyze slowdown patterns
-python3 scripts/py_outros/A0_analisar_slowdown.py --results-dir resultados/sweep_x
+### Condicoes
+
+```text
+pipeline_A/
+  sem_telemetria/
+  com_telemetria/
 ```
 
-### 4️⃣ Preparação (Data Prep)
-```bash
-# Generate analysis job manifest
-python3 scripts/py_pipeline_A/A1_gerar_manifesto_analise.py \
-  --results-dir resultados/sweep_x \
-  --analysis-dir resultados/analises_regressao
+Dentro de cada condicao:
+
+```text
+<condicao>/
+  dataset_summary.csv
+  analysis_jobs.csv
+  training_summary.csv
+  sequential_summary.csv
+  <recorte>/
+    <target>/
+      nao_sequenciais/
+      sequenciais/
 ```
 
-### 5️⃣ Treinamento de Modelos (ML)
-```bash
-# Train classical regression models
-python3 scripts/py_pipeline_A/A2_regressores_classicos.py compare \
-  --results-dir resultados/sweep_x \
-  --cv-folds 5
+Exemplo:
+
+```text
+pipeline_A/
+  sem_telemetria/
+    geral/
+      response_time_us/
+        nao_sequenciais/
+          regression_metrics.csv
+          trained_models/
+          model_diagnostics/
+        sequenciais/
+          sequential_metrics.csv
+          sequence_metadata.json
+          *.keras
+          model_diagnostics/
 ```
 
-### 6️⃣ Inferência (Prediction)
-```bash
-# Load trained models and predict on new data
-python3 scripts/py_pipeline_A/A7_usar_modelos_treinados.py
+### Recortes
+
+Recortes esperados:
+
+```text
+geral/
+perfil_gpu_10/
+perfil_gpu_50/
+perfil_gpu_100/
+perfil_gpu_120/
+kernel_busy_wait/
+kernel_compute/
+kernel_memory/
+kernel_mixed/
+perfil_gpu_<N>_kernel_<tipo>/
 ```
 
----
+### Targets
 
-## 📋 Campos Principais por Categoria
+Targets esperados:
 
-### 🎯 Prediction Targets (Y)
-- `response_time_us` - **Principal**: Tempo total de resposta
-- `queueing_delay_us` - Tempo de espera na fila
-- `slowdown` - Fator de desaceleração
-
-### 📊 Feature Categories (X)
-
-#### Baseline (Linear)
-- `requested_busy_wait_us` - Tempo esperado de execução
-- `arrival_wait_ms` - Inter-arrival time
-- `mpi_world_size`, `threads_per_process` - Paralelismo
-
-#### Kernel Configuration
-- `blocks_x`, `threads_per_block`, `grid_z` - Dimensões CUDA
-- `total_cuda_threads`, `total_warps` - Tamanho do kernel
-- `kernel_type_*` - One-hot: busy_wait, compute, memory, mixed
-
-#### Hardware
-- `sm_count` - Número de Streaming Multiprocessors
-- `device_clock_rate_khz` - Frequency da GPU
-- `gpu_name`, `cuda_driver_version` - Especificação
-
-#### Derived (Feature Engineering)
-- `effective_workers` = mpi_world_size × threads_per_process
-- `blocks_per_sm` = total_blocks / sm_count
-- `warps_per_block` = ceil(threads_per_block / 32)
-- `workers_x_total_warps` = effective_workers × total_warps
-- `workers_x_requested_busy_wait_us` = effective_workers × requested_busy_wait_us
-- `requested_busy_wait_us_per_arrival_ms` = requested_busy_wait_us / arrival_wait_ms
-
----
-
-## 🔍 Como Explorar os Dados
-
-### Via Python
-```python
-import pandas as pd
-
-# Load raw experiment data
-df = pd.read_csv("resultados/sweep_x/resultados_experimentos_*.csv")
-
-# Analyze targets
-print(df[['response_time_us', 'queueing_delay_us', 'slowdown']].describe())
-
-# Check features
-features = [col for col in df.columns if col not in 
-            ['response_time_us', 'queueing_delay_us', 'slowdown', 'cuda_error_string']]
-print(df[features].dtypes)
+```text
+response_time_us/
+queueing_delay_us/
+slowdown/
 ```
 
-### Via SQL (Excel/Database)
-```sql
-SELECT 
-  kernel_type,
-  COUNT(*) as count,
-  AVG(response_time_us) as avg_response,
-  MAX(slowdown) as max_slowdown
-FROM resultados_experimentos
-WHERE cuda_error_code = 0
-GROUP BY kernel_type
+Por padrao, o projeto roda apenas:
+
+```text
+response_time_us
 ```
 
-## 📈 Modelos Disponíveis
+### Modelos nao sequenciais
 
-| Modelo | Arquivo | Tipo | Early Stopping | Quantile |
-|--------|---------|------|---------------|----------|
-| Linear Regression | linear_regression.pkl | Baseline | ❌ | ❌ |
-| Ridge Regression | ridge_regression.pkl | Baseline | ❌ | ❌ |
-| Polynomial Ridge | polynomial_ridge.pkl | Baseline | ❌ | ❌ |
-| Random Forest | random_forest.pkl | Ensemble | ✅ (Optuna) | ❌ |
-| Gradient Boosting | gradient_boosting.pkl | Ensemble | ✅ (Optuna) | ❌ |
-| LightGBM | lightgbm.pkl | Boosting | ✅ | ✅ (p90/p95/p99) |
-| XGBoost | xgboost.pkl | Boosting | ✅ | ✅ (p90/p95/p99) |
-| CatBoost | catboost.pkl | Boosting | ✅ | ❌ |
-| kNN Regression | (não salvo) | Non-parametric | ❌ | ❌ |
+Pasta:
 
----
+```text
+pipeline_A/<condicao>/<recorte>/<target>/nao_sequenciais/
+```
 
-## 🔒 Considerações de Data Quality
+Conteudo:
 
-### Filtragem Automática
-O script `A2_regressores_classicos.py` automaticamente:
-- Remove linhas com `cuda_error_code ≠ 0`
-- Remove valores NaN/Inf
-- Aplica deterministic sampling com seed=42
+```text
+regression_metrics.csv
+trained_models/
+model_diagnostics/
+mae_comparison.png
+rmse_comparison.png
+r2_comparison.png
+```
 
-### Validações Esperadas
-- `mpi_rank` ∈ [0, mpi_world_size)
-- `threads_per_block` ≤ 1024
-- `response_time_us` ≥ `requested_busy_wait_us`
-- `slowdown` ≥ 1.0
+Modelos:
 
----
+- Linear Regression
+- Ridge Regression
+- Polynomial Ridge
+- Decision Tree
+- Random Forest
+- Gradient Boosting
+- kNN
+- LightGBM
+- XGBoost
+- CatBoost
+- LightGBM/XGBoost quantile models
 
-## 📝 Versioning
+### Modelos sequenciais
 
-- **DATA_DICTIONARY v1.0** - 27 maio 2026
-- **54 campos** documentados
-- **Modelos clássicos e sequenciais** suportados
-- **3 targets** de previsão
+Pasta:
 
----
+```text
+pipeline_A/<condicao>/<recorte>/<target>/sequenciais/
+```
 
-## 🤝 Contribuindo com Novos Campos
+Conteudo:
 
-Se adicionar novos campos ao C++ benchmark:
+```text
+sequential_metrics.csv
+sequence_metadata.json
+lstm.keras
+gru.keras
+temporal_cnn.keras
+model_diagnostics/
+mae_comparison.png
+rmse_comparison.png
+r2_comparison.png
+```
 
-1. Atualize [DATA_DICTIONARY.md](DATA_DICTIONARY.md)
-2. Atualize [data_dictionary.csv](data_dictionary.csv)
-3. Atualize feature lists em `A2_regressores_classicos.py`
-4. Re-run análises com novos dados
+Modelagem sequencial desejada:
 
----
+- nao cruzar arquivos/experimentos independentes;
+- ordenar por `submit_time_ns`, `execution_order`, `completion_time_ns`;
+- usar historico anterior + features do kernel atual;
+- prever o target do kernel atual.
 
-**Perguntas?** Consulte DATA_DICTIONARY.md para explicações detalhadas!
+### Rankings locais da Pipeline A
+
+Pasta:
+
+```text
+pipeline_A/rankings/
+```
+
+Arquivos:
+
+```text
+melhores_modelos_nao_sequenciais.csv
+melhores_modelos_sequenciais.csv
+melhores_modelos_pipeline_A.csv
+top_nao_sequenciais_response_time_us.png
+top_sequenciais_response_time_us.png
+top_pipeline_A_response_time_us.png
+```
+
+Significado:
+
+- `melhores_modelos_nao_sequenciais.csv`: ranking so entre modelos classicos.
+- `melhores_modelos_sequenciais.csv`: ranking so entre LSTM/GRU/Temporal CNN.
+- `melhores_modelos_pipeline_A.csv`: melhor modelo entre classicos e sequenciais para cada recorte/target.
+
+## Pipeline B
+
+Pipeline B concentra modelos de valores extremos.
+
+Estrutura:
+
+```text
+resultados/analises_regressao/pipeline_B/
+  sem_telemetria/
+  com_telemetria/
+  rankings/
+```
+
+Dentro de cada condicao:
+
+```text
+pipeline_B/
+  sem_telemetria/
+    <recorte>/
+      <target>/
+        extreme_values/
+```
+
+Conteudo de `extreme_values/`:
+
+```text
+extreme_value_summary.csv
+extreme_value_quantiles.csv
+gev_hist_fit.png
+gev_qq.png
+gev_pp.png
+gumbel_hist_fit.png
+gumbel_qq.png
+gumbel_pp.png
+gpd_excess_hist_fit.png
+gpd_qq.png
+gpd_pp.png
+```
+
+Modelos:
+
+- GEV sobre maximos por bloco;
+- Gumbel sobre maximos por bloco;
+- GPD/POT sobre excessos declusterizados.
+
+Rankings locais:
+
+```text
+pipeline_B/rankings/
+  extreme_value_rankings.csv
+  top_extremos_response_time_us.png
+```
+
+## Pipeline C
+
+Pipeline C concentra modelos CNN 2D.
+
+Estrutura:
+
+```text
+resultados/analises_regressao/pipeline_C/
+  sem_telemetria/
+  com_telemetria/
+  rankings/
+```
+
+Dentro de cada condicao:
+
+```text
+pipeline_C/
+  sem_telemetria/
+    <recorte>/
+      <target>/
+        2d_models/
+```
+
+Conteudo de `2d_models/`:
+
+```text
+cnn2d_x.npy
+cnn2d_y.npy
+cnn2d_dataset_metadata.json
+cnn2d_architecture_metrics.csv
+trained_models/
+  *.keras
+  *.json
+  *_metrics.json
+model_diagnostics/
+  *_predicted_vs_actual.png
+  *_error_distribution.png
+  *_loss.png
+predictions/
+  *_predictions.csv
+```
+
+Observacao:
+
+- `cnn2d_x.npy` e `cnn2d_y.npy` devem ser memmap em disco.
+- Isso evita estouro de RAM quando a quantidade de janelas e grande.
+
+Rankings locais:
+
+```text
+pipeline_C/rankings/
+  melhores_modelos_2d.csv
+  cnn2d_architecture_rankings.csv
+  top_cnn2d_response_time_us.png
+```
+
+## Comparacoes entre Pipelines
+
+Comparacoes globais ficam fora das pastas A/B/C.
+
+Pasta:
+
+```text
+resultados/analises_regressao/comparacoes_pipelines/
+```
+
+Conteudo:
+
+```text
+best_model_rankings.csv
+best_model_top_response_time_us.png
+best_model_top_queueing_delay_us.png
+best_model_top_slowdown.png
+best_model_condition_overview.png
+```
+
+Escopo:
+
+- comparar Pipeline A e Pipeline C;
+- indicar quais modelos tiveram melhor R2 por recorte/target;
+- comparar classicos, sequenciais e CNN 2D.
+
+Pipeline B nao entra nessa comparacao de R2, porque seu objetivo e outro: modelagem de cauda/pior caso.
+
+## Analise de Dependencia
+
+A analise de dependencia deve ficar na raiz da estrutura de analises, separada das pipelines.
+
+Pasta:
+
+```text
+resultados/analises_regressao/analise_dependencia/
+```
+
+Conteudo:
+
+```text
+dependency_rankings.csv
+dependency_top_response_time_us.png
+dependency_top_queueing_delay_us.png
+dependency_top_slowdown.png
+dependency_condition_overview.png
+```
+
+Metricas esperadas:
+
+- autocorrelacao por lag;
+- Durbin-Watson;
+- razao aproximada de amostra efetiva;
+- Pearson feature x target.
+
+Arquivos por recorte/target podem ser copiados ou referenciados a partir das pastas da Pipeline A, mas o ranking global deve ficar em:
+
+```text
+analise_dependencia/
+```
+
+## Nova arvore esperada
+
+Resumo:
+
+```text
+resultados/analises_regressao/
+  pipeline_A/
+    sem_telemetria/
+      <recorte>/<target>/nao_sequenciais/
+      <recorte>/<target>/sequenciais/
+    com_telemetria/
+      <recorte>/<target>/nao_sequenciais/
+      <recorte>/<target>/sequenciais/
+    rankings/
+      melhores_modelos_nao_sequenciais.csv
+      melhores_modelos_sequenciais.csv
+      melhores_modelos_pipeline_A.csv
+
+  pipeline_B/
+    sem_telemetria/
+      <recorte>/<target>/extreme_values/
+    com_telemetria/
+      <recorte>/<target>/extreme_values/
+    rankings/
+
+  pipeline_C/
+    sem_telemetria/
+      <recorte>/<target>/2d_models/
+    com_telemetria/
+      <recorte>/<target>/2d_models/
+    rankings/
+
+  comparacoes_pipelines/
+    best_model_rankings.csv
+    *.png
+
+  analise_dependencia/
+    dependency_rankings.csv
+    *.png
+```
+
+## Regras para implementar depois
+
+Quando o codigo for ajustado:
+
+1. `A1_gerar_manifesto_analise.py` deve gerar jobs com `output_dir` apontando para `pipeline_A/<condicao>/...` por padrao.
+2. Pipeline B deve usar manifesto proprio ou converter paths para `pipeline_B/<condicao>/...`.
+3. Pipeline C deve usar manifesto proprio ou converter paths para `pipeline_C/<condicao>/...`.
+4. Comparador global deve escrever somente em `comparacoes_pipelines/`.
+5. Rankings locais devem ficar dentro de `pipeline_A/rankings/`, `pipeline_B/rankings/` e `pipeline_C/rankings/`.
+6. Dependencia global deve sair em `analise_dependencia/`.
+7. Scripts devem preservar compatibilidade por uma fase, ou fornecer migracao dos resultados antigos.
+
+## Estado migrado
+
+Os scripts e resultados atuais devem seguir:
+
+```text
+resultados/analises_regressao/
+  pipeline_A/
+  pipeline_B/
+  pipeline_C/
+  comparacoes_pipelines/
+  analise_dependencia/
+```
+
+Se aparecer caminho legado, use `scripts/py_outros/migrar_analises_para_nova_estrutura.py`.

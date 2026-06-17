@@ -56,18 +56,25 @@ def normalize_row(row: dict[str, str], condition: str, model_family: str, model_
 
 def load_classical_rows(analysis_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for summary_path in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/training_summary.csv")):
+    for summary_path in sorted((analysis_root / "pipeline_A").glob("*/training_summary.csv")):
         condition = condition_from_dir(summary_path.parent)
         with summary_path.open("r", encoding="utf-8", newline="") as file:
             for row in csv.DictReader(file):
-                rows.append(normalize_row(row, condition, "classical"))
+                row = normalize_row(row, condition, "classical")
+                metrics_path = (
+                    analysis_root / "pipeline_A" / condition / row["label"] / row["target"]
+                    / "nao_sequenciais" / "regression_metrics.csv"
+                )
+                if metrics_path.exists():
+                    row["metrics_csv"] = str(metrics_path)
+                rows.append(row)
     return rows
 
 
 def load_sequential_rows(analysis_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    pattern = "*_sweep_moderado_sem_estimativas_agrupado/*/*/sequential_models/sequential_metrics.csv"
-    for metrics_path in sorted(analysis_root.glob(pattern)):
+    pattern = "*/*/*/sequenciais/sequential_metrics.csv"
+    for metrics_path in sorted((analysis_root / "pipeline_A").glob(pattern)):
         target_dir = metrics_path.parent.parent
         label_dir = target_dir.parent
         condition_dir = label_dir.parent
@@ -95,8 +102,8 @@ def load_sequential_rows(analysis_root: Path) -> list[dict[str, str]]:
 
 def load_cnn2d_rows(analysis_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    pattern = "*_sweep_moderado_sem_estimativas_agrupado/*/*/2d_models/cnn2d_architecture_metrics.csv"
-    for metrics_path in sorted(analysis_root.glob(pattern)):
+    pattern = "*/*/*/2d_models/cnn2d_architecture_metrics.csv"
+    for metrics_path in sorted((analysis_root / "pipeline_C").glob(pattern)):
         target_dir = metrics_path.parent.parent
         label_dir = target_dir.parent
         condition_dir = label_dir.parent
@@ -171,6 +178,7 @@ def plot_target_rankings(
     rows: list[dict[str, str]],
     top_n: int,
     model_family: str | None = None,
+    file_prefix: str = "best_model_top_",
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     for target in TARGETS:
@@ -195,11 +203,16 @@ def plot_target_rankings(
             text = f" {value:.3f} | {row['best_model']} | RMSE {float(row['best_rmse']):.2f}"
             ax.text(value, index, text, va="center", fontsize=8)
         fig.tight_layout()
-        fig.savefig(output_dir / f"best_model_top_{target}.png", dpi=160)
+        fig.savefig(output_dir / f"{file_prefix}{target}.png", dpi=160)
         plt.close(fig)
 
 
-def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]], model_family: str | None = None) -> None:
+def plot_condition_overview(
+    output_dir: Path,
+    rows: list[dict[str, str]],
+    model_family: str | None = None,
+    file_name: str = "best_model_condition_overview.png",
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     grouped: dict[tuple[str, str], list[float]] = {}
     for row in rows:
@@ -210,9 +223,14 @@ def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]], model_
     colors = []
     for target in TARGETS:
         for condition in ("sem_telemetria", "com_telemetria"):
+            group = grouped.get((condition, target), [])
+            if not group:
+                continue
             labels.append(f"{condition}\n{target}")
-            values.append(float(np.mean(grouped.get((condition, target), [np.nan]))))
+            values.append(float(np.mean(group)))
             colors.append("#4c78a8" if condition == "sem_telemetria" else "#f58518")
+    if not values:
+        return
 
     fig, ax = plt.subplots(figsize=(11, 5))
     x = np.arange(len(labels))
@@ -225,15 +243,23 @@ def plot_condition_overview(output_dir: Path, rows: list[dict[str, str]], model_
     for index, value in enumerate(values):
         ax.text(index, value, f"{value:.3f}", ha="center", va="bottom", fontsize=8)
     fig.tight_layout()
-    fig.savefig(output_dir / "best_model_condition_overview.png", dpi=160)
+    fig.savefig(output_dir / file_name, dpi=160)
     plt.close(fig)
 
 
-def write_outputs(output_dir: Path, rows: list[dict[str, str]], top_n: int, model_family: str | None = None) -> None:
+def write_outputs(
+    output_dir: Path,
+    rows: list[dict[str, str]],
+    top_n: int,
+    model_family: str | None = None,
+    csv_name: str = "best_model_rankings.csv",
+    plot_prefix: str = "best_model_top_",
+    overview_name: str = "best_model_condition_overview.png",
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_rankings_csv(output_dir / "best_model_rankings.csv", rows)
-    plot_target_rankings(output_dir, rows, top_n, model_family)
-    plot_condition_overview(output_dir, rows, model_family)
+    write_rankings_csv(output_dir / csv_name, rows)
+    plot_target_rankings(output_dir, rows, top_n, model_family, plot_prefix)
+    plot_condition_overview(output_dir, rows, model_family, overview_name)
 
 
 def main() -> int:
@@ -247,16 +273,49 @@ def main() -> int:
     if not all_rows:
         raise SystemExit(f"Nenhuma metrica de modelos encontrada em {args.analysis_root}")
 
-    write_outputs(args.analysis_root / "melhores_modelos_nao_sequenciais", classical_rows, args.top_n, "classical")
-    write_outputs(args.analysis_root / "melhores_modelos_sequenciais", sequential_rows, args.top_n, "sequential")
-    write_outputs(args.analysis_root / "2d_models", cnn2d_rows, args.top_n, "cnn2d")
-    write_outputs(args.analysis_root / "pipeline_a_model_rankings", pipeline_a_rows, args.top_n, None)
-    write_outputs(args.analysis_root, all_rows, args.top_n, None)
-    print(f"rankings_csv: {args.analysis_root / 'best_model_rankings.csv'}")
-    print(f"pipeline_a_rankings_csv: {args.analysis_root / 'pipeline_a_model_rankings' / 'best_model_rankings.csv'}")
-    print(f"classical_rankings_csv: {args.analysis_root / 'melhores_modelos_nao_sequenciais' / 'best_model_rankings.csv'}")
-    print(f"sequential_rankings_csv: {args.analysis_root / 'melhores_modelos_sequenciais' / 'best_model_rankings.csv'}")
-    print(f"cnn2d_rankings_csv: {args.analysis_root / '2d_models' / 'best_model_rankings.csv'}")
+    pipeline_a_rankings = args.analysis_root / "pipeline_A" / "rankings"
+    pipeline_c_rankings = args.analysis_root / "pipeline_C" / "rankings"
+    global_rankings = args.analysis_root / "comparacoes_pipelines"
+    write_outputs(
+        pipeline_a_rankings,
+        classical_rows,
+        args.top_n,
+        "classical",
+        "melhores_modelos_nao_sequenciais.csv",
+        "top_nao_sequenciais_",
+        "overview_nao_sequenciais.png",
+    )
+    write_outputs(
+        pipeline_a_rankings,
+        sequential_rows,
+        args.top_n,
+        "sequential",
+        "melhores_modelos_sequenciais.csv",
+        "top_sequenciais_",
+        "overview_sequenciais.png",
+    )
+    write_outputs(
+        pipeline_a_rankings,
+        pipeline_a_rows,
+        args.top_n,
+        None,
+        "melhores_modelos_pipeline_A.csv",
+        "top_pipeline_A_",
+        "overview_pipeline_A.png",
+    )
+    write_outputs(
+        pipeline_c_rankings,
+        cnn2d_rows,
+        args.top_n,
+        "cnn2d",
+        "melhores_modelos_2d.csv",
+        "top_cnn2d_",
+        "overview_cnn2d.png",
+    )
+    write_outputs(global_rankings, all_rows, args.top_n, None)
+    print(f"rankings_csv: {global_rankings / 'best_model_rankings.csv'}")
+    print(f"pipeline_a_rankings_dir: {pipeline_a_rankings}")
+    print(f"cnn2d_rankings_csv: {pipeline_c_rankings / 'melhores_modelos_2d.csv'}")
     return 0
 
 

@@ -35,8 +35,8 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
 
 def collect_rows(analysis_root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for summary in sorted(analysis_root.glob("*_sweep_moderado_sem_estimativas_agrupado/pipeline_c_cnn2d_training_summary.csv")):
-        condition = summary.parent.name.replace("_sweep_moderado_sem_estimativas_agrupado", "")
+    for summary in sorted((analysis_root / "pipeline_C").glob("*/pipeline_c_cnn2d_training_summary.csv")):
+        condition = summary.parent.name
         for row in read_rows(summary):
             row = dict(row)
             row["condition"] = condition
@@ -117,7 +117,7 @@ def plot_architecture_summary(path: Path, rows: list[dict[str, str]]) -> None:
 
 def main() -> int:
     args = parse_args()
-    output_dir = args.analysis_root / "2d_models"
+    output_dir = args.analysis_root / "pipeline_C" / "rankings"
     rows = collect_rows(args.analysis_root)
     if not rows:
         raise SystemExit(f"Nenhum resultado da Pipeline C encontrado em {args.analysis_root}")

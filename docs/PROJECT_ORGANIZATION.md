@@ -69,12 +69,15 @@ Raiz padrao das analises:
 resultados/analises_regressao/
 ```
 
-As analises se dividem em duas condicoes principais:
+As analises se dividem por pipeline:
 
 ```text
 resultados/analises_regressao/
-  sem_telemetria_sweep_moderado_sem_estimativas_agrupado/
-  com_telemetria_sweep_moderado_sem_estimativas_agrupado/
+  pipeline_A/
+  pipeline_B/
+  pipeline_C/
+  comparacoes_pipelines/
+  analise_dependencia/
 ```
 
 Cada condicao contem recortes:
@@ -87,9 +90,9 @@ Cada condicao contem recortes:
 Cada recorte contem alvos:
 
 ```text
-<condicao>/<recorte>/response_time_us/
-<condicao>/<recorte>/queueing_delay_us/
-<condicao>/<recorte>/slowdown/
+pipeline_<X>/<condicao>/<recorte>/response_time_us/
+pipeline_<X>/<condicao>/<recorte>/queueing_delay_us/
+pipeline_<X>/<condicao>/<recorte>/slowdown/
 ```
 
 Por padrao, `TARGETS="response_time_us"` no `.env`. Para rodar todos:
@@ -126,12 +129,15 @@ Scripts:
 Saidas por alvo:
 
 ```text
-<condicao>/<recorte>/<target>/
-  regression_metrics.csv
-  dependency_metrics.csv
-  trained_models/
-  model_diagnostics/
-  sequential_models/
+pipeline_A/<condicao>/<recorte>/<target>/
+  nao_sequenciais/
+    regression_metrics.csv
+    trained_models/
+    model_diagnostics/
+  sequenciais/
+    sequential_metrics.csv
+    *.keras
+    model_diagnostics/
 ```
 
 Modelagem sequencial:
@@ -144,9 +150,10 @@ Modelagem sequencial:
 Rankings locais da Pipeline A:
 
 ```text
-resultados/analises_regressao/melhores_modelos_nao_sequenciais/
-resultados/analises_regressao/melhores_modelos_sequenciais/
-resultados/analises_regressao/pipeline_a_model_rankings/
+resultados/analises_regressao/pipeline_A/rankings/
+  melhores_modelos_nao_sequenciais.csv
+  melhores_modelos_sequenciais.csv
+  melhores_modelos_pipeline_A.csv
 ```
 
 ## Pipeline B - Valores extremos
@@ -164,7 +171,7 @@ Scripts:
 Saidas por alvo:
 
 ```text
-<condicao>/<recorte>/<target>/extreme_values/
+pipeline_B/<condicao>/<recorte>/<target>/extreme_values/
   extreme_value_summary.csv
   extreme_value_quantiles.csv
   gev_hist_fit.png
@@ -224,8 +231,8 @@ Saidas por alvo:
 Ranking local da Pipeline C:
 
 ```text
-resultados/analises_regressao/2d_models/
-  best_model_rankings.csv
+resultados/analises_regressao/pipeline_C/rankings/
+  melhores_modelos_2d.csv
   best_cnn2d_rankings.csv
   cnn2d_all_architecture_metrics.csv
   *.png

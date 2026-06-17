@@ -436,7 +436,7 @@ def existing_sequential_result(
 def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, str]:
     paths = REG.result_paths(args.results_dir, args.first_sweep, job["include_regex"])
     output_dir = Path(job["output_dir"])
-    seq_output_dir = output_dir / "sequential_models"
+    seq_output_dir = output_dir / "sequenciais"
     diagnostics_dir = seq_output_dir / "model_diagnostics"
     seq_output_dir.mkdir(parents=True, exist_ok=True)
     metadata_signature = expected_metadata(args, job, paths)
@@ -454,7 +454,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str], keras) -> dict[str, s
     if not args.no_cache and not args.only_model and not args.force_model:
         cached = existing_sequential_result(job, paths, seq_output_dir, metadata_signature)
         if cached is not None:
-            print(f"{job['label']} {job['target']}: cached sequential_models={seq_output_dir}")
+            print(f"{job['label']} {job['target']}: cached sequenciais={seq_output_dir}")
             return cached
 
     groups, rows_loaded, events_used = load_grouped_events(paths, job["target"])

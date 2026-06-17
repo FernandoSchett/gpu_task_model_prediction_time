@@ -101,11 +101,9 @@ O ranking geral agora e gerado pelo comparador central e inclui Pipeline A e Pip
 
 | Pasta | Conteudo |
 | --- | --- |
-| `resultados/analises_regressao/melhores_modelos_nao_sequenciais/` | Top apenas dos regressores classicos. |
-| `resultados/analises_regressao/melhores_modelos_sequenciais/` | Top apenas de LSTM, GRU e Temporal CNN. |
-| `resultados/analises_regressao/2d_models/` | Top apenas da Pipeline C/CNN 2D. |
-| `resultados/analises_regressao/pipeline_a_model_rankings/` | Top geral apenas da Pipeline A. |
-| `resultados/analises_regressao/` | Top geral misturando Pipeline A e Pipeline C. |
+| `resultados/analises_regressao/pipeline_A/rankings/` | Tops locais da Pipeline A: classicos, sequenciais e combinado A. |
+| `resultados/analises_regressao/pipeline_C/rankings/` | Top local da Pipeline C/CNN 2D. |
+| `resultados/analises_regressao/comparacoes_pipelines/` | Top global misturando Pipeline A e Pipeline C. |
 
 ## Pipeline B
 
@@ -192,7 +190,7 @@ CNN2D_PLOTS_ONLY=true bash scripts/rodar_pipeline_c_cnn2d.sh
 Os resultados por recorte/alvo ficam na mesma estrutura da Pipeline A, dentro de `2d_models`:
 
 ```text
-resultados/analises_regressao/<condicao>_sweep_moderado_sem_estimativas_agrupado/<recorte>/<alvo>/2d_models/
+resultados/analises_regressao/pipeline_C/<condicao>/<recorte>/<alvo>/2d_models/
   model_diagnostics/
     *_predicted_vs_actual.png
     *_error_distribution.png
@@ -203,7 +201,7 @@ resultados/analises_regressao/<condicao>_sweep_moderado_sem_estimativas_agrupado
 Os rankings globais da Pipeline C ficam em:
 
 ```text
-resultados/analises_regressao/2d_models/
+resultados/analises_regressao/pipeline_C/rankings/
 ```
 
 ## Rodar Tudo
