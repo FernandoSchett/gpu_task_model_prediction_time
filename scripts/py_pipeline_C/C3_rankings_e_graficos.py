@@ -125,7 +125,7 @@ def main() -> int:
     fieldnames = [
         "condition", "label", "target", "architecture", "MAE", "RMSE", "R2",
         "train_samples", "test_samples", "workers", "window_size", "features",
-        "model_path", "plots_dir", "cached",
+        "model_path", "plots_dir", "predictions_csv", "cached",
     ]
     all_path = output_dir / "cnn2d_all_architecture_metrics.csv"
     write_csv(all_path, rows, fieldnames)

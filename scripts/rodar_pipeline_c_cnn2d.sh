@@ -27,6 +27,7 @@ PRESERVED_ENV_VARS=(
   CNN2D_CACHE
   CNN2D_MODEL_ONLY
   CNN2D_FORCE_MODEL
+  CNN2D_PLOTS_ONLY
   SEED
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
@@ -70,6 +71,7 @@ CNN2D_REQUIRE_GPU="${CNN2D_REQUIRE_GPU:-true}"
 CNN2D_CACHE="${CNN2D_CACHE:-true}"
 CNN2D_MODEL_ONLY="${CNN2D_MODEL_ONLY:-}"
 CNN2D_FORCE_MODEL="${CNN2D_FORCE_MODEL:-false}"
+CNN2D_PLOTS_ONLY="${CNN2D_PLOTS_ONLY:-false}"
 SEED="${SEED:-42}"
 
 if [[ -z "${PYTHON_BIN:-}" ]]; then
@@ -105,6 +107,9 @@ if [[ -n "${CNN2D_MODEL_ONLY}" ]]; then
 fi
 if [[ "${CNN2D_FORCE_MODEL}" == "true" ]] || [[ "${CNN2D_FORCE_MODEL}" == "1" ]]; then
   CNN2D_MODEL_ARGS+=(--force-model)
+fi
+if [[ "${CNN2D_PLOTS_ONLY}" == "true" ]] || [[ "${CNN2D_PLOTS_ONLY}" == "1" ]]; then
+  CNN2D_MODEL_ARGS+=(--plots-only)
 fi
 
 matching_dirs() {

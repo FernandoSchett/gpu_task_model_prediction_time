@@ -208,6 +208,8 @@ Saidas por alvo:
     *_predicted_vs_actual.png
     *_error_distribution.png
     *_loss.png
+  predictions/
+    *_predictions.csv
 ```
 
 Ranking local da Pipeline C:

@@ -162,6 +162,9 @@ CNN2D_MAX_SAMPLES=120000
 CNN2D_MAX_ARCHITECTURES=8
 CNN2D_EPOCHS=8
 CNN2D_CACHE=true
+CNN2D_MODEL_ONLY=
+CNN2D_FORCE_MODEL=false
+CNN2D_PLOTS_ONLY=false
 ```
 
 Forcar recalculo:
@@ -176,10 +179,21 @@ Rodar novamente apenas uma arquitetura CNN 2D, ignorando cache:
 CNN2D_MODEL_ONLY=cnn2d_f16_kt3_d64 CNN2D_FORCE_MODEL=true bash scripts/rodar_pipeline_c_cnn2d.sh
 ```
 
+Regenerar apenas graficos e CSVs de predicoes usando modelos 2D ja salvos:
+
+```bash
+CNN2D_PLOTS_ONLY=true bash scripts/rodar_pipeline_c_cnn2d.sh
+```
+
 Os resultados por recorte/alvo ficam na mesma estrutura da Pipeline A, dentro de `2d_models`:
 
 ```text
 resultados/analises_regressao/<condicao>_sweep_moderado_sem_estimativas_agrupado/<recorte>/<alvo>/2d_models/
+  model_diagnostics/
+    *_predicted_vs_actual.png
+    *_error_distribution.png
+  predictions/
+    *_predictions.csv
 ```
 
 Os rankings globais da Pipeline C ficam em:

@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-gpu", action=argparse.BooleanOptionalAction, default=env_flag("CNN2D_REQUIRE_GPU", True))
     parser.add_argument("--only-model", default=os.getenv("CNN2D_MODEL_ONLY", ""), help="Train only one 2D CNN architecture by name.")
     parser.add_argument("--force-model", action="store_true", default=env_flag("CNN2D_FORCE_MODEL", False), help="Retrain selected architecture even when cached model exists.")
+    parser.add_argument("--plots-only", action="store_true", default=env_flag("CNN2D_PLOTS_ONLY", False), help="Regenerate prediction/error plots from cached 2D models without training.")
     parser.add_argument("--no-cache", action="store_true")
     return parser.parse_args()
 
@@ -159,6 +160,7 @@ def build_model(keras, input_shape: tuple[int, int, int], params: dict[str, floa
 
 
 def plot_prediction(path: Path, y_true: np.ndarray, y_pred: np.ndarray, title: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     sample = min(len(y_true), 5000)
     rng = np.random.default_rng(42)
     idx = np.arange(len(y_true)) if len(y_true) <= sample else np.sort(rng.choice(len(y_true), sample, replace=False))
@@ -176,6 +178,7 @@ def plot_prediction(path: Path, y_true: np.ndarray, y_pred: np.ndarray, title: s
 
 
 def plot_error_distribution(path: Path, y_true: np.ndarray, y_pred: np.ndarray, title: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     residual = y_true - y_pred
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.hist(residual, bins=80, color="#4c78a8", alpha=0.85)
@@ -189,6 +192,7 @@ def plot_error_distribution(path: Path, y_true: np.ndarray, y_pred: np.ndarray, 
 
 
 def plot_loss(path: Path, history) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(history.history.get("loss", []), label="train")
     if "val_loss" in history.history:
@@ -201,13 +205,49 @@ def plot_loss(path: Path, history) -> None:
     plt.close(fig)
 
 
+def write_predictions(path: Path, y_true: np.ndarray, y_pred: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    residual = y_true - y_pred
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["index", "y_true", "y_pred", "error", "abs_error"])
+        writer.writeheader()
+        for index, (true_value, pred_value, error) in enumerate(zip(y_true, y_pred, residual)):
+            writer.writerow({
+                "index": index,
+                "y_true": f"{float(true_value):.9g}",
+                "y_pred": f"{float(pred_value):.9g}",
+                "error": f"{float(error):.9g}",
+                "abs_error": f"{abs(float(error)):.9g}",
+            })
+
+
+def existing_metric_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as file:
+        return list(csv.DictReader(file))
+
+
+def merge_metric_rows(old_rows: list[dict[str, str]], new_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged: dict[str, dict[str, str]] = {}
+    for row in old_rows:
+        architecture = row.get("architecture", "")
+        if architecture:
+            merged[architecture] = row
+    for row in new_rows:
+        merged[row["architecture"]] = row
+    return sorted(merged.values(), key=lambda row: (-float(row["R2"]), float(row["RMSE"]), row["architecture"]))
+
+
 def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[dict[str, str]]:
     tensor_path = Path(row["tensor_path"])
     output_dir = tensor_path.parent
     models_dir = output_dir / "trained_models"
     plots_dir = output_dir / "model_diagnostics"
+    predictions_dir = output_dir / "predictions"
     models_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
 
     data = np.load(tensor_path)
     x = data["x"].astype(np.float32)
@@ -227,12 +267,19 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
         cached = False
 
         use_cache = not args.no_cache and not args.force_model
-        if use_cache and model_path.exists() and metrics_path.exists():
+        if use_cache and model_path.exists():
             model = keras.models.load_model(model_path)
             prediction = model.predict(test_x, batch_size=args.batch_size, verbose=0).reshape(-1)
             metric_row = metrics(test_y, prediction)
             cached = True
+            if not metrics_path.exists():
+                metrics_path.write_text(json.dumps(metric_row, indent=2) + "\n", encoding="utf-8")
         else:
+            if args.plots_only:
+                raise SystemExit(
+                    f"Modelo CNN2D ausente para plots-only: {model_path}. "
+                    "Rode sem CNN2D_PLOTS_ONLY ou treine esta arquitetura primeiro."
+                )
             model = build_model(keras, tuple(train_x.shape[1:]), params)
             history = model.fit(
                 train_x,
@@ -264,6 +311,7 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
 
         plot_prediction(plots_dir / f"{name}_predicted_vs_actual.png", test_y, prediction, name)
         plot_error_distribution(plots_dir / f"{name}_error_distribution.png", test_y, prediction, name)
+        write_predictions(predictions_dir / f"{name}_predictions.csv", test_y, prediction)
         results.append({
             "label": row["label"],
             "target": row["target"],
@@ -278,6 +326,7 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
             "features": row["features"],
             "model_path": str(model_path),
             "plots_dir": str(plots_dir),
+            "predictions_csv": str(predictions_dir / f"{name}_predictions.csv"),
             "cached": "true" if cached else "false",
         })
         print(
@@ -286,6 +335,8 @@ def run_dataset(args: argparse.Namespace, row: dict[str, str], keras) -> list[di
             f"{' cached' if cached else ''}"
         )
     metrics_csv = output_dir / "cnn2d_architecture_metrics.csv"
+    if args.only_model:
+        results = merge_metric_rows(existing_metric_rows(metrics_csv), results)
     write_metrics(metrics_csv, results)
     return results
 
@@ -295,6 +346,7 @@ def write_metrics(path: Path, rows: list[dict[str, str]]) -> None:
     fieldnames = [
         "label", "target", "architecture", "MAE", "RMSE", "R2", "train_samples",
         "test_samples", "workers", "window_size", "features", "model_path", "plots_dir", "cached",
+        "predictions_csv",
     ]
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
