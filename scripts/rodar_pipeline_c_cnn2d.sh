@@ -11,6 +11,7 @@ PRESERVED_ENV_VARS=(
   TELEMETRY_RESULTS_DIR
   TELEMETRY_RESULTS_DIRS
   ANALYSIS_ROOT
+  RUN_CONDITIONS
   PYTHON_BIN
   TARGETS
   GPU_TARGETS
@@ -58,6 +59,7 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
+RUN_CONDITIONS="${RUN_CONDITIONS:-sem_telemetria com_telemetria}"
 TARGETS="${TARGETS:-response_time_us}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CNN2D_WINDOW_SIZE="${CNN2D_WINDOW_SIZE:-32}"
@@ -177,8 +179,17 @@ run_one() {
     "${CNN2D_CACHE_ARGS[@]}"
 }
 
-run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
-run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+should_run_condition() {
+  local label="$1"
+  [[ " ${RUN_CONDITIONS} " == *" ${label} "* ]]
+}
+
+if should_run_condition "sem_telemetria"; then
+  run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
+fi
+if should_run_condition "com_telemetria"; then
+  run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+fi
 
 "${PYTHON_BIN}" scripts/py_pipeline_C/C3_rankings_e_graficos.py --analysis-root "${ANALYSIS_ROOT}"
 

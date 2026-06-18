@@ -161,7 +161,7 @@ resultados/analises_regressao/pipeline_A/rankings/
 Objetivo:
 
 - Estimar caudas e pior caso usando EVT.
-- Ajustar GEV, Gumbel e GPD/POT com declustering.
+- Ajustar GEV, Gumbel, GPD/POT com declustering e GPD dependente com extremal index.
 
 Scripts:
 
@@ -190,6 +190,7 @@ Modelos da Pipeline B:
 - `gev`: GEV sobre maximos por bloco.
 - `gumbel`: Gumbel sobre maximos por bloco.
 - `gpd`: GPD/POT sobre excessos declusterizados.
+- `dependent_gpd`: GPD/POT com runs declustering + extremal index para dependencia temporal.
 
 ## Pipeline C - CNN 2D
 

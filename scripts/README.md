@@ -129,7 +129,7 @@ Arquivos Python da Pipeline B ficam em `scripts/py_pipeline_B/`:
 
 | Script | Etapa |
 | --- | --- |
-| `py_pipeline_B/B1_valores_extremos.py` | Ajusta GEV/Gumbel sobre maximos por bloco e GPD sobre excessos declusterizados. |
+| `py_pipeline_B/B1_valores_extremos.py` | Ajusta GEV/Gumbel sobre maximos por bloco, GPD/POT declusterizado e GPD dependente com extremal index. |
 
 Comando padrao:
 
@@ -160,6 +160,7 @@ Outras opcoes:
 ```bash
 EVT_MODEL_ONLY=gumbel EVT_FORCE_MODEL=true bash scripts/rodar_pipeline_b_extremos.sh
 EVT_MODEL_ONLY=gpd EVT_FORCE_MODEL=true bash scripts/rodar_pipeline_b_extremos.sh
+EVT_MODEL_ONLY=dependent_gpd EVT_FORCE_MODEL=true bash scripts/rodar_pipeline_b_extremos.sh
 ```
 
 ## Pipeline C

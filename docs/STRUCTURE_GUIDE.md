@@ -224,6 +224,13 @@ Significado:
 
 Pipeline B concentra modelos de valores extremos.
 
+Modelos:
+
+- `gev`: GEV sobre maximos por bloco.
+- `gumbel`: Gumbel sobre maximos por bloco.
+- `gpd`: GPD/POT sobre excessos declusterizados.
+- `dependent_gpd`: GPD/POT com runs declustering + extremal index para dependencia temporal.
+
 Estrutura:
 
 ```text

@@ -11,6 +11,7 @@ PRESERVED_ENV_VARS=(
   TELEMETRY_RESULTS_DIR
   TELEMETRY_RESULTS_DIRS
   ANALYSIS_ROOT
+  RUN_CONDITIONS
   TARGETS
   GPU_TARGETS
   CV_FOLDS
@@ -65,6 +66,7 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
+RUN_CONDITIONS="${RUN_CONDITIONS:-sem_telemetria com_telemetria}"
 TARGETS="${TARGETS:-response_time_us}"
 GPU_TARGETS="${GPU_TARGETS:-10 50 100 120}"
 CV_FOLDS="${CV_FOLDS:-5}"
@@ -224,8 +226,17 @@ run_one() {
   fi
 }
 
-run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
-run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+should_run_condition() {
+  local label="$1"
+  [[ " ${RUN_CONDITIONS} " == *" ${label} "* ]]
+}
+
+if should_run_condition "sem_telemetria"; then
+  run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
+fi
+if should_run_condition "com_telemetria"; then
+  run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+fi
 
 if [[ -f "scripts/py_outros/comparar_modelos_pipelines.py" ]]; then
   "${PYTHON_BIN}" scripts/py_outros/comparar_modelos_pipelines.py --analysis-root "${ANALYSIS_ROOT}"

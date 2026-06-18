@@ -11,6 +11,7 @@ PRESERVED_ENV_VARS=(
   TELEMETRY_RESULTS_DIR
   TELEMETRY_RESULTS_DIRS
   ANALYSIS_ROOT
+  RUN_CONDITIONS
   PYTHON_BIN
   TARGETS
   GPU_TARGETS
@@ -49,6 +50,7 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-resultados/analises_regressao}"
+RUN_CONDITIONS="${RUN_CONDITIONS:-sem_telemetria com_telemetria}"
 if [[ -z "${PYTHON_BIN:-}" ]]; then
   if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
     PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
@@ -127,8 +129,17 @@ run_one() {
     --return-quantiles ${EVT_RETURN_QUANTILES} \
     --parallel-jobs "${EVT_PARALLEL_JOBS}" \
     "${EVT_MODEL_ARGS[@]}" \
-    "${EVT_CACHE_ARGS[@]}"
+  "${EVT_CACHE_ARGS[@]}"
 }
 
-run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
-run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+should_run_condition() {
+  local label="$1"
+  [[ " ${RUN_CONDITIONS} " == *" ${label} "* ]]
+}
+
+if should_run_condition "sem_telemetria"; then
+  run_one "sem_telemetria" "${NORMAL_RESULTS_DIRS}"
+fi
+if should_run_condition "com_telemetria"; then
+  run_one "com_telemetria" "${TELEMETRY_RESULTS_DIRS}"
+fi
