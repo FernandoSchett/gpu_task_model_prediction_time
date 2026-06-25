@@ -59,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=int(os.getenv("SEED", "42") or "42"))
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--parallel-jobs", type=int, default=int(os.getenv("CNN2D_PREPROCESS_PARALLEL_JOBS", "1")))
+    parser.add_argument("--max-source-rows", type=int, default=int(os.getenv("CNN2D_MAX_SOURCE_ROWS", "500000")))
+    parser.add_argument("--max-tensor-gb", type=float, default=float(os.getenv("CNN2D_MAX_TENSOR_GB", "4.0")))
     return parser.parse_args()
 
 
@@ -200,6 +202,43 @@ def write_summary(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def count_source_rows(paths: list[Path]) -> int:
+    rows = 0
+    for path in paths:
+        with path.open("r", encoding="utf-8", newline="") as file:
+            rows += max(0, sum(1 for _line in file) - 1)
+    return rows
+
+
+def skipped_row(job: dict[str, str], paths: list[Path], output_dir: Path, reason: str, rows_loaded: int = 0) -> dict[str, str]:
+    metadata_path = output_dir / "cnn2d_dataset_metadata.json"
+    metadata = {
+        "label": job["label"],
+        "target": job["target"],
+        "source_files": len(paths),
+        "rows_loaded": rows_loaded,
+        "status": "skipped",
+        "skip_reason": reason,
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "label": job["label"],
+        "target": job["target"],
+        "source_files": str(len(paths)),
+        "rows_loaded": str(rows_loaded),
+        "events_used": "0",
+        "workers": "0",
+        "samples": "0",
+        "window_size": "",
+        "stride": "",
+        "features": str(len(FEATURES)),
+        "tensor_path": "",
+        "y_path": "",
+        "metadata_path": str(metadata_path),
+        "cached": "skipped",
+    }
+
+
 def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
     paths = result_paths(args.results_dir, job["include_regex"])
     if not paths:
@@ -211,6 +250,11 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
     metadata_path = output_dir / "cnn2d_dataset_metadata.json"
     expected = signature(args, job, paths)
     expected_hash = hash_signature(expected)
+
+    source_rows = count_source_rows(paths)
+    if args.max_source_rows > 0 and source_rows > args.max_source_rows:
+        reason = f"source_rows={source_rows} maior que CNN2D_MAX_SOURCE_ROWS={args.max_source_rows}"
+        return skipped_row(job, paths, output_dir, reason, source_rows)
 
     if not args.no_cache and tensor_path.exists() and y_path.exists() and metadata_path.exists():
         try:
@@ -238,6 +282,12 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
     events, workers, rows_loaded = load_events(paths, job["target"])
     if not events:
         raise SystemExit(f"Nenhum evento valido para {job['label']} {job['target']}")
+    count = max(0, (len(events) - args.window_size - 1) // args.stride + 1)
+    sample_count_estimate = len(choose_starts(count, args.stride, args.max_samples, args.seed, args.sample_mode))
+    tensor_gb = sample_count_estimate * max(1, workers) * args.window_size * len(FEATURES) * np.dtype(np.float32).itemsize / (1024 ** 3)
+    if args.max_tensor_gb > 0 and tensor_gb > args.max_tensor_gb:
+        reason = f"tensor_estimado={tensor_gb:.2f} GiB maior que CNN2D_MAX_TENSOR_GB={args.max_tensor_gb}"
+        return skipped_row(job, paths, output_dir, reason, rows_loaded)
     tensor_shape, sample_count = build_tensor_dataset(
         events,
         workers,
@@ -273,7 +323,7 @@ def run_job(args: argparse.Namespace, job: dict[str, str]) -> dict[str, str]:
         "rows_loaded": str(rows_loaded),
         "events_used": str(len(events)),
         "workers": str(workers),
-        "samples": str(len(y)),
+        "samples": str(sample_count),
         "window_size": str(args.window_size),
         "stride": str(args.stride),
         "features": str(len(FEATURES)),

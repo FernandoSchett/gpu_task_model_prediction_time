@@ -63,7 +63,18 @@ def import_tensorflow(tf_device: str, require_gpu: bool):
 
 def load_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as file:
-        return list(csv.DictReader(file))
+        rows = []
+        for row in csv.DictReader(file):
+            if row.get("cached") == "skipped":
+                continue
+            if not row.get("tensor_path") or not row.get("y_path"):
+                continue
+            if not Path(row["tensor_path"]).exists() or not Path(row["y_path"]).exists():
+                continue
+            if int(float(row.get("samples") or 0)) <= 0:
+                continue
+            rows.append(row)
+        return rows
 
 
 def metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
