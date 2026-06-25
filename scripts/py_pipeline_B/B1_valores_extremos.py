@@ -298,6 +298,89 @@ def existing_evt_result(
     }
 
 
+def skipped_evt_result(
+    job: dict[str, str],
+    paths: list[Path],
+    output_dir: Path,
+    expected: dict[str, object],
+    values: np.ndarray,
+    maxima: np.ndarray,
+    excesses: np.ndarray,
+    threshold: float,
+    theta: float,
+    reason: str,
+) -> dict[str, str]:
+    metrics_path = output_dir / "evt_fit_metrics.csv"
+    quantiles_path = output_dir / "evt_quantile_estimates.csv"
+    write_csv(
+        metrics_path,
+        [{
+            "method": "skipped",
+            "samples": "0",
+            "shape": "",
+            "loc": "",
+            "scale": "",
+            "threshold": finite_or_empty(threshold),
+            "ks_statistic": "",
+            "ks_pvalue": "",
+            "extremal_index": finite_or_empty(theta),
+            "skip_reason": reason,
+        }],
+        [
+            "method", "samples", "shape", "loc", "scale", "threshold",
+            "ks_statistic", "ks_pvalue", "extremal_index", "skip_reason",
+        ],
+    )
+    write_csv(
+        quantiles_path,
+        [{
+            "method": "skipped",
+            "quantile": "",
+            "predicted_value": "",
+            "threshold": finite_or_empty(threshold),
+            "conditional_excess_quantile": "",
+            "block_size": "",
+            "decluster_run_length": "",
+            "extremal_index": finite_or_empty(theta),
+            "skip_reason": reason,
+        }],
+        [
+            "method", "quantile", "predicted_value", "threshold",
+            "conditional_excess_quantile", "block_size", "decluster_run_length",
+            "extremal_index", "skip_reason",
+        ],
+    )
+    metadata = {
+        **expected,
+        "rows_loaded": int(len(values)),
+        "threshold": threshold,
+        "block_maxima": int(len(maxima)),
+        "cluster_excesses": int(len(excesses)),
+        "extremal_index": theta,
+        "status": "skipped",
+        "skip_reason": reason,
+    }
+    (output_dir / "evt_metadata.json").write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "label": job["label"],
+        "target": job["target"],
+        "source_files": str(len(paths)),
+        "rows_loaded": str(len(values)),
+        "block_maxima": str(len(maxima)),
+        "cluster_excesses": str(len(excesses)),
+        "threshold": finite_or_empty(threshold),
+        "gev_ks_pvalue": "",
+        "gumbel_ks_pvalue": "",
+        "gpd_ks_pvalue": "",
+        "dependent_gpd_ks_pvalue": "",
+        "extremal_index": finite_or_empty(theta),
+        "metrics_csv": str(metrics_path),
+        "quantiles_csv": str(quantiles_path),
+        "output_dir": str(output_dir),
+        "cached": "skipped",
+    }
+
+
 def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dict[str, str]:
     paths = REG.result_paths(args.results_dir, args.first_sweep, job["include_regex"])
     output_dir = Path(job["output_dir"]) / "extreme_values"
@@ -324,7 +407,12 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
     has_block_maxima = len(maxima) >= 20
     has_excesses = len(excesses) >= 20
     if not has_block_maxima and not has_excesses:
-        raise SystemExit(f"Poucos maximos de bloco e poucos clusters/excessos para {job['label']} {job['target']}.")
+        reason = (
+            f"Poucos maximos de bloco e poucos clusters/excessos: "
+            f"block_maxima={len(maxima)} cluster_excesses={len(excesses)}"
+        )
+        print(f"{job['label']} {job['target']}: skipped EVT ({reason})")
+        return skipped_evt_result(job, paths, output_dir, metadata_signature, values, maxima, excesses, threshold, theta, reason)
 
     gev_params = stats.genextreme.fit(maxima) if has_block_maxima else None
     gumbel_params = stats.gumbel_r.fit(maxima) if has_block_maxima else None
@@ -338,10 +426,12 @@ def fit_evt_for_job(args: argparse.Namespace, job: dict[str, str], stats) -> dic
     run_gpd = args.only_model in ("", "gpd") and has_excesses
     run_dependent_gpd = args.only_model in ("", "dependent_gpd") and has_excesses
     if not any((run_gev, run_gumbel, run_gpd, run_dependent_gpd)):
-        raise SystemExit(
-            f"Modelo EVT pedido indisponivel para {job['label']} {job['target']}: "
-            f"block_maxima={len(maxima)} cluster_excesses={len(excesses)}."
+        reason = (
+            f"Modelo EVT pedido indisponivel: "
+            f"model={args.only_model or 'all'} block_maxima={len(maxima)} cluster_excesses={len(excesses)}"
         )
+        print(f"{job['label']} {job['target']}: skipped EVT ({reason})")
+        return skipped_evt_result(job, paths, output_dir, metadata_signature, values, maxima, excesses, threshold, theta, reason)
     quantile_rows: list[dict[str, str]] = []
     for quantile in args.return_quantiles:
         gev_value = float(stats.genextreme.ppf(quantile, *gev_params)) if run_gev and gev_params is not None else math.nan

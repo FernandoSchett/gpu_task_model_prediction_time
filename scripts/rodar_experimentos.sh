@@ -11,6 +11,7 @@ PRESERVED_ENV_VARS=(
   BLOCK_ID
   REPETITION_ID
   EXPERIMENT_CONFIG_PATH
+  PYTHON_BIN
 )
 for var_name in "${PRESERVED_ENV_VARS[@]}"; do
   if [[ -v "${var_name}" ]]; then
@@ -38,6 +39,13 @@ for var_name in "${PRESERVED_ENV_VARS[@]}"; do
 done
 
 EXPERIMENT_CONFIG_PATH="${EXPERIMENT_CONFIG_PATH:-experimentos/sweep_padrao.json}"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 
 if [[ ! -f "${EXPERIMENT_CONFIG_PATH}" ]]; then
   echo "Arquivo de configuracao de experimento nao encontrado: ${EXPERIMENT_CONFIG_PATH}" >&2
@@ -45,7 +53,7 @@ if [[ ! -f "${EXPERIMENT_CONFIG_PATH}" ]]; then
 fi
 
 eval "$(
-  python3 - "${EXPERIMENT_CONFIG_PATH}" <<'PY'
+  "${PYTHON_BIN}" - "${EXPERIMENT_CONFIG_PATH}" <<'PY'
 import json
 import shlex
 import sys
